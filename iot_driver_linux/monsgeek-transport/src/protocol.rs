@@ -928,6 +928,11 @@ pub struct CommandTable {
     pub get_report: Option<u8>,
     pub get_kboption: Option<u8>,
     pub get_sleeptime: Option<u8>,
+    /// Userpic slot upload/download. YiChip boards reuse the same command bytes
+    /// with a different page header (no slot byte, a length field instead) that
+    /// this driver does not implement, so they get `None`.
+    pub set_userpic: Option<u8>,
+    pub get_userpic: Option<u8>,
 }
 
 pub static RY5088_COMMANDS: CommandTable = CommandTable {
@@ -945,6 +950,8 @@ pub static RY5088_COMMANDS: CommandTable = CommandTable {
     get_report: Some(0x83),
     get_kboption: Some(0x89),
     get_sleeptime: Some(0x91),
+    set_userpic: Some(cmd::SET_USERPIC),
+    get_userpic: Some(cmd::GET_USERPIC),
 };
 
 pub static YICHIP_COMMANDS: CommandTable = CommandTable {
@@ -962,6 +969,8 @@ pub static YICHIP_COMMANDS: CommandTable = CommandTable {
     get_report: None,
     get_kboption: Some(0x86),
     get_sleeptime: None,
+    set_userpic: None,
+    get_userpic: None,
 };
 
 impl ProtocolFamily {

@@ -145,6 +145,24 @@ pub struct KeyboardInterface {
     commands: &'static CommandTable,
 }
 
+/// Userpic flash slots: the firmware keeps them in one 2 KB sector at 384 bytes each.
+const USERPIC_SLOTS: u8 = 5;
+
+/// RGB bytes a userpic carries — one triple for each of the 126 matrix positions
+/// (21 columns × 6 rows) the SET_USERPIC pages cover.
+pub const USERPIC_BYTES: usize = 126 * 3;
+
+fn check_userpic_slot(slot: u8) -> Result<(), KeyboardError> {
+    if slot < USERPIC_SLOTS {
+        Ok(())
+    } else {
+        Err(KeyboardError::InvalidParameter(format!(
+            "Userpic slot must be 0-{}",
+            USERPIC_SLOTS - 1
+        )))
+    }
+}
+
 /// Which config to write into DKS slot 0.
 ///
 /// Slot 0 doubles as keymatrix layer 0 — the key's *base* output once it leaves DKS
@@ -640,57 +658,41 @@ impl KeyboardInterface {
 
     /// Upload a userpic to a flash slot (0-4).
     ///
-    /// `data` must be exactly 288 bytes in column-major format:
-    /// pixel (col, row) at offset `col * 18 + row * 3`.
-    /// Padded to 384 bytes with zeros for the flash slot.
+    /// `data` holds one RGB triple per matrix position (column-major, `col * 6 + row`),
+    /// at most [`USERPIC_BYTES`] of it; the rest of the slot is written black.
     ///
-    /// Uses the SET_USERPIC (0x0C) bulk protocol: 7 pages of 56/42 bytes.
+    /// Sent as SET_USERPIC pages of 56 bytes, the last one short (42 bytes).
     pub fn upload_userpic(&self, slot: u8, data: &[u8]) -> Result<(), KeyboardError> {
-        if slot > 4 {
-            return Err(KeyboardError::InvalidParameter(
-                "Userpic slot must be 0-4".into(),
-            ));
+        let cmd_byte = self.commands.set_userpic.ok_or_else(|| {
+            KeyboardError::NotSupported("User pictures not available on this device".into())
+        })?;
+        check_userpic_slot(slot)?;
+        if data.len() > USERPIC_BYTES {
+            return Err(KeyboardError::InvalidParameter(format!(
+                "Userpic data is {} bytes, a slot holds {USERPIC_BYTES}",
+                data.len()
+            )));
         }
+        let mut slot_data = [0u8; USERPIC_BYTES];
+        slot_data[..data.len()].copy_from_slice(data);
 
-        // Pad data to full slot size (384 bytes)
-        let mut slot_data = vec![0u8; 384];
-        let len = data.len().min(384);
-        slot_data[..len].copy_from_slice(&data[..len]);
-
-        // Send 7 pages: pages 0-5 have 56 bytes, page 6 has 42 bytes
-        // Total: 6*56 + 42 = 378 bytes (covers 384 with some overlap handled by firmware)
         const PAGE_SIZE: usize = 56;
-        const LAST_PAGE_SIZE: usize = 42;
-        const NUM_PAGES: usize = 7;
-
-        for page in 0..NUM_PAGES {
-            let data_size = if page == NUM_PAGES - 1 {
-                LAST_PAGE_SIZE
-            } else {
-                PAGE_SIZE
-            };
-            let is_last = page == NUM_PAGES - 1;
-
-            let start = page * PAGE_SIZE;
-            let end = (start + data_size).min(slot_data.len());
-
-            // Build payload: [slot, 0xFF, page, data_size, last_flag, 0, 0, ...rgb_data...]
-            let mut payload = vec![0u8; 7 + data_size];
-            payload[0] = slot;
-            payload[1] = 0xFF;
-            payload[2] = page as u8;
-            payload[3] = data_size as u8;
-            payload[4] = if is_last { 1 } else { 0 };
-            // payload[5] = 0; payload[6] = 0; // already zero
-            if end > start {
-                let chunk_len = end - start;
-                payload[7..7 + chunk_len].copy_from_slice(&slot_data[start..end]);
-            }
-
+        let last_page = USERPIC_BYTES.div_ceil(PAGE_SIZE) - 1;
+        for (page, chunk) in slot_data.chunks(PAGE_SIZE).enumerate() {
+            // [slot, 0xFF, page, data_size, last_flag, 0, 0, rgb...]
+            let mut payload = vec![
+                slot,
+                0xFF,
+                page as u8,
+                chunk.len() as u8,
+                u8::from(page == last_page),
+                0,
+                0,
+            ];
+            payload.extend_from_slice(chunk);
             self.transport
-                .send_command(cmd::SET_USERPIC, &payload, ChecksumType::Bit7)?;
+                .send_command(cmd_byte, &payload, ChecksumType::Bit7)?;
 
-            // Small delay between pages
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
@@ -699,22 +701,19 @@ impl KeyboardInterface {
 
     /// Download a userpic from a flash slot (0-4).
     ///
-    /// Returns 384 bytes in column-major format (6 blocks × 64 bytes).
-    /// Uses GET_USERPIC (0x8C) block read protocol.
+    /// Returns [`USERPIC_BYTES`] bytes in the layout [`upload_userpic`](Self::upload_userpic)
+    /// takes. Uses the GET_USERPIC (0x8C) block read protocol.
     pub fn download_userpic(&self, slot: u8) -> Result<Vec<u8>, KeyboardError> {
-        if slot > 4 {
-            return Err(KeyboardError::InvalidParameter(
-                "Userpic slot must be 0-4".into(),
-            ));
-        }
+        let cmd_byte = self.commands.get_userpic.ok_or_else(|| {
+            KeyboardError::NotSupported("User pictures not available on this device".into())
+        })?;
+        check_userpic_slot(slot)?;
 
-        let mut data = Vec::with_capacity(384);
-
-        // Read 6 blocks of 64 bytes each
-        for block in 0..6u8 {
+        let mut data = Vec::with_capacity(USERPIC_BYTES.next_multiple_of(INPUT_REPORT_SIZE));
+        for block in 0..USERPIC_BYTES.div_ceil(INPUT_REPORT_SIZE) as u8 {
             let query = [slot, 0xFF, block];
             let resp = self.transport.query_page(
-                cmd::GET_USERPIC,
+                cmd_byte,
                 &query,
                 ChecksumType::Bit7,
                 INPUT_REPORT_SIZE,
@@ -722,8 +721,7 @@ impl KeyboardInterface {
             data.extend_from_slice(&resp);
         }
 
-        // Truncate to slot size
-        data.truncate(384);
+        data.truncate(USERPIC_BYTES);
         Ok(data)
     }
 
