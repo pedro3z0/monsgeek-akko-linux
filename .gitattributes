@@ -1,0 +1,18 @@
+# Keep the repository's line endings LF, whatever platform checks it out.
+#
+# This tree travelled through Windows/exFAT once and came back with CRLF in 263
+# tracked text files: `git status` listed every one of them as rewritten (375883
+# insertions and the same number of deletions) while `git diff --ignore-cr-at-eol`
+# showed no content change at all. `text=auto` leaves the blobs as they already
+# are (LF) and `eol=lf` keeps a Windows checkout from reintroducing that churn,
+# so a diff means a change again.
+* text=auto eol=lf
+
+# Never normalise opaque payloads: treating them as text would rewrite real bytes.
+*.bin -text
+*.dfu -text
+*.pcap -text
+*.webm -text
+
+# Ghidra owns this directory, including the CRLF in `projectState`.
+firmwares/*/ghidra_*.rep/** -text
