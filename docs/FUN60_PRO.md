@@ -44,8 +44,10 @@ handled yet, and it says which.
     entries in the device database, so the id is the real discriminator.
   - version word = `frame[7] | frame[8] << 8` = **0x0309 = v309**.
   - precision = version ≥ 768 → **0.01 mm steps, raw = mm × 100**.
-- `GET_FEATURE_LIST` (0xE6) returns all zeros on v309 — it is a stub. Never
-  take the precision from it; use the version word.
+- `GET_FEATURE_LIST` (0xE6) is a stub on v309, and not literally all zeros: all
+  five captured dumps answer `E6 00 00 00 00 00 00 19 00 …`, with
+  `precision_byte` and `capabilities` both 0. Never take the precision from it;
+  use the version word.
 - Commands that merely echo back on stock v309: 0x80, 0x9D, 0xD0, 0xAE, 0xAD,
   0xE7.
 - `GET_SLEEPTIME` (0x91) does return real data: `2C 01 2C 01 90 06 90 06`
