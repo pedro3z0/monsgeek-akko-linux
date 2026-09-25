@@ -2,6 +2,8 @@
 
 This document is the single source of truth for the MonsGeek/Akko keyboard HID protocol, covering USB wired, 2.4GHz wireless (dongle), and Bluetooth LE connections.
 
+Model-specific, live-verified notes from a FUN60 Pro on firmware v309 are in [FUN60_PRO.md](FUN60_PRO.md) — including quirks this driver does not handle yet.
+
 ## Table of Contents
 
 1. [Overview](#1-overview)
@@ -699,6 +701,9 @@ Byte 7: Blue
 | 4 | 500 Hz | 2ms |
 | 5 | 250 Hz | 4ms |
 | 6 | 125 Hz | 8ms |
+
+On hardware the setting is stored and round-trips, but no effect on the wire has been
+demonstrated: [FUN60_PRO.md section 3](FUN60_PRO.md#3-polling-rate-what-is-actually-known).
 
 ### 5.3 Magnetism/Trigger Settings
 
