@@ -228,82 +228,74 @@ Read: `[0xE5, sub, 0x01, page]` → 64 raw bytes per page.
   config-only standard RT is impossible — the fallback is a host-side layer or a
   firmware patch.
 
-  **Measured answer: v309 does implement fixed-point (standard) Rapid Trigger.**
-  Two earlier verdicts here were wrong — first "config-only standard RT is
-  impossible", then "the release point is honoured but 0.9 mm misbehaves" — and
-  both were inferences from press speed rather than measurements. This is the
-  measured result, and the method matters more than the conclusion.
+  **The answer: this firmware implements Rapid Trigger as *continuous* RT
+  (CRT), not fixed-point RT. Two earlier verdicts in this file were wrong, and
+  the correction is worth recording because the mistake is easy to repeat.**
 
-  **Method.** The keyboard's own boot-keyboard HID reports (interface 0,
-  `/dev/hidraw4`, world-readable via the udev rules) were captured alongside the
-  depth stream, both timestamped, so "what the finger did" lines up with "what
-  the firmware emitted". Consumer-side behaviour is not evidence: holding a key
-  makes the OS auto-repeat at ~25-30/s (the terminal showed "many" characters
-  for a *single* firmware press), and the vendor webapp shows *none* for the
-  same press because it does not implement auto-repeat. Only the HID stream
-  distinguishes the firmware re-firing from a consumer repeating a held key.
-  Over a 30 s hold the firmware emitted exactly **one** press-down.
+  A behavioural test said the opposite. With the reset point set near a full
+  release, eleven static dwells at 1.3-2.3 mm produced no press, which looked
+  like a working gate. It is not evidence of one: a key that needs a full
+  release before re-arming behaves that way whether its re-arm is a fixed
+  depth or a relative lift, because every test returned near rest. Conclusion
+  drawn from it ("config-only standard RT works, the release point is a real
+  gate") was not supported.
 
-  **The reset point is a real gate.** With `actuation 2.0, release 0.2,
-  rt_lift 1.8` — re-arming possible only by fully releasing — eleven static
-  dwells at 1.3-2.3 mm produced **no** press in ten cases, and the one press
-  that did follow a dwell was preceded by a trace showing a genuine return to
-  0.20 mm. Holding at partial depth does not re-trigger. Repeated on W at
-  `actuation 1.5, release 0.7, rt_lift 0.8`: six presses, **zero** of them
-  without a genuine release, while 1.1 mm and 1.2 mm dwells stayed silent.
+  The algorithm is visible in an independent implementation:
+  [dot-agi/ry5088-flasher](https://github.com/dot-agi/ry5088-flasher),
+  `firmware/common/hall.c`, written against the same four vendor fields this
+  driver writes (`press_cmm`, `release_cmm`, `rt_press_cmm`, `rt_release_cmm`):
 
-  **What the hardware limits, and why 0.9 mm failed.** Two measured properties
-  of this board, not of the firmware:
-
-  | property | measured | consequence |
-  |---|---|---|
-  | resting depth | **0.3 mm**, not 0 | the reset point must sit above it |
-  | motion noise | **~0.2 mm** | the window must be wider than it |
-  | travel | 3.5 mm | |
-  | reports during motion | coarse, 0.5-1.0 mm steps at ~115/s | fast lifts can be missed by sampling |
-
-  A key rests at 0.3 mm, so a 0.9 mm trigger leaves only 0.6 mm above rest, and
-  a 0.4 mm window there is comparable to the noise. Worse, the finger naturally
-  hovers in **0.8-1.5 mm** during a press, so a 0.9 mm trigger sits *inside* the
-  band the finger occupies and slow presses recross it — each crossing being a
-  legitimate trigger, which reads as machine-gunning but is correct behaviour.
-  A Wooting fits a 0.3 mm window at a 0.9 mm trigger because it reads true zero
-  with quieter sensing.
-
-  **Working configuration** (verified on A and on W/A/S/D):
-
-  ```
-  actuation 1.5-2.0 mm,  release = actuation - rt_lift,  rt_lift 0.5-0.8 mm
+  ```c
+  int rtp = COUNTS(c->rt_press_cmm);      /* 0x02 */
+  int rtl = COUNTS(c->rt_release_cmm);    /* 0x03 */
+  if (!k->pressed) {
+      if (d <= k->rt_ref) k->rt_ref = d;                 /* follow the valley */
+      int trip = k->rt_armed ? (d - k->rt_ref >= rtp)    /* relative RISE  */
+                             : (d >= act);                /* first actuation */
+      if (trip) { k->pressed = 1; k->rt_armed = 1; k->rt_ref = d; }
+  } else {
+      if (d >= k->rt_ref) k->rt_ref = d;                 /* follow the peak   */
+      if (k->rt_ref - d >= rtl) { k->pressed = 0; k->rt_ref = d; }  /* relative LIFT */
+  }
+  if (d <= rel) { k->pressed = 0; k->rt_armed = 0; k->rt_ref = d; }
   ```
 
-  The reset point then lands at 0.7-1.5 mm — clear of the 0.3 mm rest, with a
-  window wider than the noise — and counter-strafing behaves: release is crisp,
-  and a partial lift neither re-triggers nor keeps the key pressed. This is
-  Wooting's algorithm on non-Wooting hardware, reached through vendor settings
-  alone, so it behaves identically on Windows and macOS.
+  The re-arm test is `rt_ref - d >= rtl` — a lift *distance* from a tracked
+  peak. `release` never gates the re-trigger; it only disarms the key so the
+  next press must cross the actuation point again. That is CRT by construction,
+  and the two separate sensitivities (0x02/0x03) are its signature: they
+  describe *how far to move*, not *where to return to*. Standard RT needs only
+  a reset point.
 
-  Alternatives considered and rejected:
+  **Consequence.** No setting on this firmware produces Wooting-style
+  behaviour. Raising the actuation point until the trigger sits above the
+  finger's hover band (0.8-1.5 mm) stops the relative-lift path from
+  misfiring during an ordinary press, which is why a deep trigger *looks* like
+  standard RT — but it is mitigation, not the feature. Measured hardware limits
+  that force this, all on the board rather than in code: resting depth **0.3 mm**
+  (not 0), motion noise **~0.2 mm**, travel 3.5 mm, and reports coarse during
+  motion (0.5-1.0 mm steps at ~115/s, so a fast lift can fall between samples).
+  The trigger therefore cannot go much below ~1.0-1.5 mm.
 
-  1. **DKS (base mode 2)** — discrete thresholds, one keystroke per press, but no
-     re-arm at all, so it is not RT. Also does not auto-repeat when held. Buys
-     nothing over the tuned RT configuration.
-  2. **Bottom deadzone** — measured: setting 0.4 mm leaves the resting depth at
-     0.2-0.3 mm. It does not restore the missing zero, so it cannot buy a lower
-     trigger.
-  3. **KBOPTION RT stability** (levels 0-5, 25 ms steps) — writable and it
-     round-trips, but it is *not* what the vendor UI calls "RT Stab". The bundle
-     defines that label as the travel required to re-trigger and reset, i.e.
-     `rt_press`/`rt_lift`. The KBOPTION byte had no effect on re-triggering and
-     is most likely a dead option on v309. Note also that a read immediately
-     after writing it returns the old value (the v309 stale-read quirk, section
-     7), so a driver that trusts its own write-back will misreport.
-  3. **Host-side layer.** Read the depth stream, run the state machine in
-     userspace, and emit keystrokes through uinput while detaching the kernel's
-     HID driver so the board's own reports do not also reach the input stack.
-     `monsgeek-joystick` already does depth -> uinput, so the pieces exist. The
-     cost is a full input takeover: if the process dies, the keyboard is dead
-     until the driver is rebound.
-  4. **Firmware patch.** The only true fix; out of this repository's scope.
+  Working configuration, verified for counter-strafing on W/A/S/D:
+  `actuation 1.5, release 0.7, rt_press 0.3, rt_lift 0.8`, RT enabled. Single
+  clean trigger per press, re-arm without a full release, and — importantly —
+  the keyboard emits one `press-down` per press: a 30 s hold produced exactly
+  one HID press, so the "many" characters seen in a terminal are the OS
+  auto-repeating a held key, not the firmware re-firing. The vendor webapp shows
+  none for the same press because it does not implement auto-repeat. Only the
+  keyboard's own boot-keyboard HID reports (interface 0, `/dev/hidraw4`,
+  readable via the udev rules) settle such questions.
+
+  **Getting the firmware.** The image the vendor serves is **DEFLATE-compressed,
+  not encrypted** (49,431 -> 124,668 bytes; an earlier note here calling it
+  encrypted was wrong — ~8 bits/byte entropy indicates compression as well as
+  encryption, and that was not tested). It inflates to a plain image with its
+  vector table at offset 0, base 0x08000000. `ry-flash --fetch 2304` does the
+  same and knows this board:
+  `{"dev_id": 2304, "vid": 12625, "pid": 20545, "name":
+  "ry5088_akko_fun60pro_1m_8k", "displayName": "FUN60 PRO", "infor_id": [0, 9]}`.
+
 - Modes live in the **active profile**. Keymaps are per (profile, layer) with
   4 layers, and the Fn table is a separate store (sys 0/1).
 
