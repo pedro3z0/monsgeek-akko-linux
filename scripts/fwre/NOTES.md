@@ -69,3 +69,30 @@ fields.
   Use a **fresh project**; re-processing an existing one inherits stale
   function boundaries and silently truncates results. Ghidra here has no Jython —
   postscripts must be Java.
+
+## Where the structural search stands
+
+The command dispatch is a **jump table**, not a comparison chain: a linear
+disassembly of the whole image finds **zero** `cmp` instructions against
+`0x65` (`SET_MULTI_MAGENTISM`) or `0xE5` (`GET_MULTI_MAGENTISM`). The handler is
+reached by indexing a table with the command byte, so it has to be found by
+reversing the table dispatch, not by pattern-matching constants.
+
+An inference worth recording, from the data model rather than from RT: the
+firmware stores **two** separate sensitivities per key — `rt_press` (sub-command
+0x02) and `rt_lift` (0x03) — on top of the actuation (0x00) and release (0x01)
+points. Standard RT needs only a reset point; press/lift *sensitivities* are the
+CRT shape, since they describe how far to move rather than where to return to.
+That is suggestive, not proof: the firmware could still gate on the release
+field and use the sensitivities for something else. Settling it needs the code.
+
+## What the remaining RT question is worth
+
+It is the difference between:
+- **fixed-point** — a config that works at Wooting-like settings, and
+- **CRT** — needing either a firmware patch or a much deeper trigger point.
+
+Behaviourally, `W A S D` at actuation 1.5 / release 0.7 / rt_lift 0.8 is
+configured and verified for clean single triggers with a real re-arm, which is
+usable for counter-strafing either way. The open question is only whether a
+shallower trigger is achievable, and that is what the firmware decides.
