@@ -197,11 +197,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             rt_lift,
             mode,
             rt,
+            standard,
         }) => {
             let mode = mode.map(Into::into);
+            // `--standard` takes exactly two values (clap enforces the count), so
+            // this cannot panic on a short slice.
+            let standard = standard.map(|v| (v[0], v[1]));
             commands::with_keyboard_on_profile(&ctx, |kb| {
                 commands::triggers::set_key_trigger(
-                    kb, &keys, actuation, release, rt_press, rt_lift, mode, rt,
+                    kb, &keys, actuation, release, rt_press, rt_lift, mode, rt, standard,
                 )
             })?;
         }

@@ -304,6 +304,17 @@ pub enum Commands {
         /// Enable/disable the Rapid-Trigger flag (optional; combines with --mode)
         #[arg(long)]
         rt: Option<bool>,
+        /// Write a standard (non-continuous) RT mapping to the selected keys:
+        /// two values, <actuation-mm> <sensitivity-mm>. The release point is
+        /// derived as actuation - sensitivity, so it is not given here. Implies
+        /// --rt true and leaves each key's base mode alone.
+        #[arg(
+            long,
+            num_args = 2,
+            value_names = ["ACTUATION_MM", "SENSITIVITY_MM"],
+            conflicts_with_all = ["actuation", "release", "rt_press", "rt_lift", "rt"],
+        )]
+        standard: Option<Vec<f32>>,
     },
 
     /// Set the base mode for all keys at once

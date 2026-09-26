@@ -365,15 +365,34 @@ iot_driver set-key-trigger RShift --release 1.0
 iot_driver set-key-trigger A --mode rt
 iot_driver set-key-trigger Q --actuation 1.0 --mode dks
 iot_driver set-key-trigger A --rt-press 0.4 --rt-lift 0.4   # per-key RT sensitivity
+iot_driver set-key-trigger W RShift --standard 1.5 0.4       # standard RT, two keys
 ```
 
 Keys are named (`A`, `RShift`, `comma`), or given as a class (`alpha`, `mods`),
 a position (`#9`) or a range (`0..9`) — see [Key selectors](#key-selectors).
 
 `--rt-press` / `--rt-lift` set this key's Rapid-Trigger sensitivity only
-(`set-rt` remains the board-wide fan-out). To give one key a standard-RT
-mapping, set all three: `--actuation 1.5 --release 1.1 --rt-press 0.4
---rt-lift 0.4 --rt true`.
+(`set-rt` remains the board-wide fan-out).
+
+**`--standard <actuation-mm> <sensitivity-mm>`** applies the same standard
+(non-continuous) RT mapping that `set-rt standard` applies board-wide, but only
+to the selected keys — see [set-rt](#set-rt) for what the mapping is. The
+release point is derived as actuation − sensitivity, so it is not given here;
+every selected key gets identical raw values, and each confirmation line states
+the release point it landed on.
+
+```bash
+iot_driver set-key-trigger W --standard 1.5 0.4               # one key
+iot_driver set-key-trigger alpha --standard 1.2 0.3           # a whole class
+iot_driver set-key-trigger 0..9 --standard 1.5 0.4            # a row
+```
+
+It implies `--rt true` and leaves each key's base mode alone, so a SnapTap or
+DKS key keeps its mode. It cannot be combined with `--actuation`, `--release`,
+`--rt-press`, `--rt-lift` or `--rt`, since it derives those values — give either
+the plan or the individual fields, not both. The values are validated once
+before the first write, so a rejected mapping leaves every selected key
+untouched.
 
 Modes: `normal`, `rt`, `dks`, `snaptap`
 

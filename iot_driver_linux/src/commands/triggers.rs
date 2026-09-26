@@ -737,7 +737,9 @@ pub fn set_top_deadzone(keyboard: &KeyboardInterface, mm: f32) -> CommandResult 
 /// Set trigger settings for one or more keys
 ///
 /// One optional argument per field the command can change, so the list grows
-/// with the table rather than needing a struct.
+/// with the table rather than needing a struct. `standard` is the exception: it
+/// derives three of those fields at once, so it is planned once up front and
+/// applied to every selected key.
 #[allow(clippy::too_many_arguments)]
 pub fn set_key_trigger(
     keyboard: &KeyboardInterface,
@@ -748,10 +750,25 @@ pub fn set_key_trigger(
     rt_lift: Option<f32>,
     mode: Option<KeyMode>,
     rt: Option<bool>,
+    standard: Option<(f32, f32)>,
 ) -> CommandResult {
-    for key in resolve_keys(keyboard, keys)? {
+    // Resolve the key list first: a selector matching nothing should be reported
+    // before a precision query or a write, so a typo cannot touch half a board.
+    let resolved = resolve_keys(keyboard, keys)?;
+
+    // `--standard` is planned once, so every key gets the same raw values and
+    // the validation runs before the first write rather than per key.
+    let plan = match standard {
+        Some((actuation_mm, sensitivity_mm)) => {
+            let precision = keyboard.get_precision().unwrap_or_default();
+            Some(standard_rt_plan(actuation_mm, sensitivity_mm, precision)?)
+        }
+        None => None,
+    };
+
+    for key in resolved {
         set_one_key_trigger(
-            keyboard, key, actuation, release, rt_press, rt_lift, mode, rt,
+            keyboard, key, actuation, release, rt_press, rt_lift, mode, rt, plan,
         )?;
     }
     Ok(())
@@ -767,6 +784,7 @@ fn set_one_key_trigger(
     rt_lift: Option<f32>,
     mode: Option<KeyMode>,
     rt: Option<bool>,
+    plan: Option<StandardRtPlan>,
 ) -> CommandResult {
     // Get current settings first
     let current = match keyboard.get_key_trigger(key) {
@@ -783,26 +801,36 @@ fn set_one_key_trigger(
     let precision = keyboard.get_precision().unwrap_or_default();
     // Per-key config uses the same u16 precision as the bulk table (0.01mm here).
 
-    // Base mode and RT flag are independent; each preserves the current value
-    // when not overridden. RT sensitivity is per key too (sub-commands 0x02 /
-    // 0x03), so `--rt-press` / `--rt-lift` change this key only -- `set-rt`
-    // stays the board-wide fan-out.
+    // A standard-RT plan supplies all four travel values and turns RT on, so it
+    // takes precedence over the individual fields (clap already rejects the two
+    // being given together). `mode` is left alone either way: standard RT is a
+    // travel relationship, not a base mode, and a key set to SnapTap or DKS
+    // should keep it.
+    let (actuation, deactuation, press, lift, rapid_trigger) = match plan {
+        Some(p) => (
+            Some(p.actuation),
+            Some(p.release),
+            Some(p.sensitivity),
+            Some(p.sensitivity),
+            true,
+        ),
+        None => (
+            actuation.map(|mm| TravelDepth::from_mm(mm, precision).raw()),
+            release.map(|mm| TravelDepth::from_mm(mm, precision).raw()),
+            rt_press.map(|mm| TravelDepth::from_mm(mm, precision).raw()),
+            rt_lift.map(|mm| TravelDepth::from_mm(mm, precision).raw()),
+            rt.unwrap_or(current.rapid_trigger),
+        ),
+    };
+
     let settings = KeyTriggerSettings {
         key_index: key,
-        actuation: actuation
-            .map(|mm| TravelDepth::from_mm(mm, precision).raw())
-            .unwrap_or(current.actuation),
-        deactuation: release
-            .map(|mm| TravelDepth::from_mm(mm, precision).raw())
-            .unwrap_or(current.deactuation),
-        rt_press: rt_press
-            .map(|mm| TravelDepth::from_mm(mm, precision).raw())
-            .unwrap_or(current.rt_press),
-        rt_lift: rt_lift
-            .map(|mm| TravelDepth::from_mm(mm, precision).raw())
-            .unwrap_or(current.rt_lift),
+        actuation: actuation.unwrap_or(current.actuation),
+        deactuation: deactuation.unwrap_or(current.deactuation),
+        rt_press: press.unwrap_or(current.rt_press),
+        rt_lift: lift.unwrap_or(current.rt_lift),
         mode: mode.unwrap_or(current.mode),
-        rapid_trigger: rt.unwrap_or(current.rapid_trigger),
+        rapid_trigger,
     };
 
     match keyboard.set_key_trigger(&settings) {
@@ -820,6 +848,15 @@ fn set_one_key_trigger(
                 TravelDepth::from_raw(settings.rt_press).format(precision),
                 TravelDepth::from_raw(settings.rt_lift).format(precision),
             );
+            // Spell out the derived release point: under --standard the release
+            // value is not something the user typed, and it is the whole point of
+            // the mapping, so it should be visible per key.
+            if plan.is_some() {
+                println!(
+                    "  standard RT: must return below {:.2}mm before re-firing",
+                    TravelDepth::from_raw(settings.deactuation).to_mm(precision)
+                );
+            }
         }
         Err(e) => eprintln!(
             "Failed to set trigger for {}: {e}",
