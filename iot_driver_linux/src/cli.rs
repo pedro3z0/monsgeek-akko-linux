@@ -269,11 +269,17 @@ pub enum Commands {
         mm: f32,
     },
 
-    /// Set trigger settings for a specific key
+    /// Set trigger settings for one or more keys
+    ///
+    /// Keys are given by name (`A`, `RShift`, `comma`), by class (`alpha`,
+    /// `mods`), as a position (`#9`) or a range (`0..9`). Names are matched
+    /// against the connected board's layout, so `RShift` means this board's
+    /// RShift.
     #[command(visible_alias = "skt")]
     SetKeyTrigger {
-        /// Key index (0-125)
-        key: u8,
+        /// Keys to change
+        #[arg(required = true)]
+        keys: Vec<iot_driver::keyclass::KeySelector>,
         /// Actuation point in mm (optional)
         #[arg(long)]
         actuation: Option<f32>,
@@ -308,29 +314,32 @@ pub enum Commands {
     /// Bind, clear, or show a Snap-Tap (SOCD) key pair
     #[command(visible_alias = "st")]
     SetSnaptap {
-        /// Key index
-        key: u8,
-        /// Partner key index to bind with (bidirectional)
+        /// Keys to bind, clear or show
+        #[arg(required = true)]
+        keys: Vec<iot_driver::keyclass::KeySelector>,
+        /// Partner key to bind with, bidirectional (exactly one key)
         #[arg(long, conflicts_with = "clear")]
-        with: Option<u8>,
+        with: Option<iot_driver::keyclass::KeySelector>,
         /// Clear this key's binding (and its partner's back-reference)
         #[arg(long, conflicts_with = "with")]
         clear: bool,
     },
 
-    /// Set the Mod-Tap tap-vs-hold decision time for a key
+    /// Set the Mod-Tap tap-vs-hold decision time for one or more keys
     #[command(visible_alias = "mtt")]
     SetModtapTime {
-        /// Key index
-        key: u8,
+        /// Keys to change
+        #[arg(required = true)]
+        keys: Vec<iot_driver::keyclass::KeySelector>,
         /// Decision time in milliseconds (10 ms steps, 0-2550)
         ms: u16,
     },
 
-    /// Show or configure DKS (Dynamic Keystroke) for a key
+    /// Show or configure DKS (Dynamic Keystroke) for one or more keys
     Dks {
-        /// Key index
-        key: u8,
+        /// Keys to show or configure
+        #[arg(required = true)]
+        keys: Vec<iot_driver::keyclass::KeySelector>,
         /// DKS activation travel in mm (e.g. 0.7)
         #[arg(long)]
         travel_mm: Option<f32>,

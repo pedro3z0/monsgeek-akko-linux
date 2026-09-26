@@ -257,6 +257,39 @@ impl KeyboardInterface {
             .unwrap_or("")
     }
 
+    /// Find a matrix position by the name of the key sitting there.
+    ///
+    /// Case-insensitive, and matched against *this board's* names rather than
+    /// the generic table in `monsgeek_transport::protocol::matrix`: that table
+    /// is the M1 V5 TKL layout, which agrees with a 60% board through the alpha
+    /// block and then diverges (`RShift` is 82 there, 76 on a FUN60 Pro), so a
+    /// lookup that trusted it would address the wrong key. Gaps and unnamed
+    /// positions never match.
+    ///
+    /// A board with no name table at all (nothing in the device database) falls
+    /// back to the generic table: names are all we have there, and refusing
+    /// every one of them would make the commands unusable rather than merely
+    /// approximate. The fallback is deliberately per-*board*, not per-key — a
+    /// board that names its keys never mixes the two layouts.
+    pub fn matrix_key_index(&self, name: &str) -> Option<u8> {
+        let want = name.trim();
+        if want.is_empty() {
+            return None;
+        }
+        if self
+            .matrix_key_names
+            .iter()
+            .any(|n| !n.is_empty() && n != "?")
+        {
+            return self
+                .matrix_key_names
+                .iter()
+                .position(|n| !n.is_empty() && n != "?" && n.eq_ignore_ascii_case(want))
+                .and_then(|i| u8::try_from(i).ok());
+        }
+        monsgeek_transport::protocol::matrix::key_index_from_name(want).map(|p| p.get())
+    }
+
     /// Set non-analog matrix positions (GPIO/encoder keys that can't be calibrated).
     pub fn set_non_analog_positions(&mut self, positions: Vec<u8>) {
         self.non_analog_positions = positions;

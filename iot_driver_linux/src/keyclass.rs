@@ -207,34 +207,78 @@ enum Term {
     Class(KeyClass),
     Index(MatrixPos),
     Range(u8, u8),
+    /// A key name, resolved against whichever board is connected.
+    ///
+    /// Kept unresolved on purpose: names are only meaningful relative to a
+    /// layout, and the static table is the M1 V5 one. See
+    /// `KeySelector::resolve_with`.
+    Name(String),
 }
 
 impl KeySelector {
-    /// Matrix positions this term selects.
-    fn members(&self) -> Vec<MatrixPos> {
-        match self.term {
+    fn members_with(
+        &self,
+        by_name: impl Fn(&str) -> Option<MatrixPos>,
+    ) -> Result<Vec<MatrixPos>, String> {
+        Ok(match &self.term {
             Term::Class(c) => c.members(),
-            Term::Index(i) => vec![i],
-            Term::Range(a, b) => (a..=b).map(MatrixPos::new).collect(),
-        }
+            Term::Index(i) => vec![*i],
+            Term::Range(a, b) => (*a..=*b).map(MatrixPos::new).collect(),
+            Term::Name(name) => vec![by_name(name).ok_or_else(|| {
+                // The class list belongs here now that a name survives parsing:
+                // a token that is neither a class nor a key on this board is
+                // exactly when the user needs to be told what *is* addressable.
+                format!(
+                    "unknown key: \"{name}\" — this board has no key by that name, \
+                     and a matrix position can always be given as #N. Classes: {}",
+                    KeyClass::ALL
+                        .iter()
+                        .map(|c| c.label().to_ascii_lowercase())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?],
+        })
     }
 
     /// Resolve a whole selector list: the union of the positive terms (or every
     /// named position when there are none) minus the union of the negated ones.
-    pub fn resolve(selectors: &[KeySelector]) -> Vec<MatrixPos> {
+    ///
+    /// Names resolve against the generic table. Prefer [`Self::resolve_with`]
+    /// when a board is connected.
+    pub fn resolve(selectors: &[KeySelector]) -> Result<Vec<MatrixPos>, String> {
+        Self::resolve_with(selectors, matrix::key_index_from_name)
+    }
+
+    /// Resolve a selector list with a board-specific name lookup.
+    ///
+    /// This is what makes `RShift` mean *this* board's RShift: the generic table
+    /// is the M1 V5 TKL layout, and a 60% board puts several modifiers and the
+    /// navigation cluster somewhere else entirely.
+    pub fn resolve_with(
+        selectors: &[KeySelector],
+        by_name: impl Fn(&str) -> Option<MatrixPos>,
+    ) -> Result<Vec<MatrixPos>, String> {
         let positive: Vec<&KeySelector> = selectors.iter().filter(|s| !s.negated).collect();
         let mut keys: Vec<MatrixPos> = if positive.is_empty() {
             KeyClass::All.members()
         } else {
-            positive.iter().flat_map(|s| s.members()).collect()
+            // Collected in a loop rather than with flat_map: a name that fails to
+            // resolve has to abort the whole list, and flat_map over a Result
+            // would carry the error into the *next* term instead of stopping.
+            let mut keys = Vec::new();
+            for selector in positive {
+                keys.extend(selector.members_with(&by_name)?);
+            }
+            keys
         };
         for excluded in selectors.iter().filter(|s| s.negated) {
-            let drop = excluded.members();
+            let drop = excluded.members_with(&by_name)?;
             keys.retain(|k| !drop.contains(k));
         }
         keys.sort_by_key(|&i| (i.row(), i.col()));
         keys.dedup();
-        keys
+        Ok(keys)
     }
 }
 
@@ -287,25 +331,18 @@ impl FromStr for KeySelector {
                 term: Term::Class(class),
             });
         }
+        // Punctuation has spellings ("comma") that no layout carries, so
+        // normalise to the glyph before storing; the name itself stays
+        // unresolved until a board (or the generic table) can place it.
         let aliased = PUNCT_ALIASES
             .iter()
             .find(|(alias, _)| alias.eq_ignore_ascii_case(body))
             .map(|&(_, name)| name)
             .unwrap_or(body);
-        if let Some(pos) = matrix::key_index_from_name(aliased) {
-            return Ok(Self {
-                negated,
-                term: Term::Index(pos),
-            });
-        }
-        Err(format!(
-            "unknown key or class: \"{body}\". Classes: {}; or a key name, #index, or N..M range",
-            KeyClass::ALL
-                .iter()
-                .map(|c| c.label().to_ascii_lowercase())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))
+        Ok(Self {
+            negated,
+            term: Term::Name(aliased.to_string()),
+        })
     }
 }
 
@@ -364,7 +401,7 @@ mod tests {
             .split(',')
             .map(|t| t.parse().unwrap_or_else(|e| panic!("{t}: {e}")))
             .collect();
-        KeySelector::resolve(&sels)
+        KeySelector::resolve(&sels).expect("selector resolves")
     }
 
     #[test]
@@ -416,11 +453,54 @@ mod tests {
         );
     }
 
+    /// An unknown name is a *resolution* failure, not a parse failure: the same
+    /// token can be valid on one board and absent on another, so it can only be
+    /// judged against the layout being used. The message has to stay useful
+    /// enough to recover from, pointing at `#N` for the position form.
     #[test]
-    fn unknown_token_lists_the_classes() {
-        let err = "nonsense".parse::<KeySelector>().unwrap_err();
+    fn unknown_key_is_reported_at_resolve_time() {
+        let sel: KeySelector = "nonsense".parse().expect("a name always parses");
+        let err = KeySelector::resolve(&[sel]).unwrap_err();
+        assert!(err.contains("nonsense"), "{err}");
+        assert!(err.contains("#N"), "{err}");
+    }
+
+    /// A class-looking token that is not a class now parses as a *name*, so the
+    /// rejection moves to resolve time — where the class list is still spelled
+    /// out, because that is the moment a user can act on it.
+    #[test]
+    fn unknown_class_lists_the_classes() {
+        let sel: KeySelector = "nonsense-class".parse().expect("a name always parses");
+        let err = KeySelector::resolve(&[sel]).unwrap_err();
         assert!(err.contains("alpha"), "{err}");
         assert!(err.contains("function"), "{err}");
+    }
+
+    /// The whole point of deferring names: the board's table is the only one
+    /// consulted, so `RShift` means *this* board's RShift rather than the
+    /// position it occupies in the M1 V5 TKL layout.
+    #[test]
+    fn board_names_win_over_the_generic_table() {
+        let sel: KeySelector = "RShift".parse().unwrap();
+        let board = |name: &str| {
+            name.eq_ignore_ascii_case("RShift")
+                .then(|| MatrixPos::new(76))
+        };
+        let resolved = KeySelector::resolve_with(&[sel], board).expect("resolves");
+        assert_eq!(resolved, vec![MatrixPos::new(76)]);
+    }
+
+    /// A name the board does not carry is an error, never a silent fall-back to
+    /// the generic table: the two layouts disagree, so `F12` on a 60% board would
+    /// otherwise resolve to whatever sits in that slot there — a gap, or worse, a
+    /// real key the user never meant to touch. `#N` is the escape hatch, and the
+    /// message says so.
+    #[test]
+    fn a_name_absent_from_the_board_does_not_fall_back() {
+        let sel: KeySelector = "F12".parse().unwrap();
+        let err = KeySelector::resolve_with(&[sel], |_| None).unwrap_err();
+        assert!(err.contains("F12"), "{err}");
+        assert!(err.contains("#N"), "{err}");
     }
 
     #[test]

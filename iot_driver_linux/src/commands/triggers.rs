@@ -2,11 +2,38 @@
 
 use super::CommandResult;
 use iot_driver::key_action::KeyAction;
+use iot_driver::keyclass::KeySelector;
 use monsgeek_keyboard::{
     DksAction, DksBinding, DksConfig, DksPhase, KeyMode, KeyTriggerSettings, KeyboardInterface,
     ModeByte, TravelDepth, settings::Precision,
 };
-use monsgeek_transport::protocol::KeymatrixLayer;
+use monsgeek_transport::protocol::{KeymatrixLayer, MatrixPos};
+
+/// Resolve key selectors to matrix positions, using the connected board's own
+/// key names before the generic table.
+///
+/// A selector is written in the user's vocabulary — `A`, `RShift`, `alpha`,
+/// `#9` — and each of those means "the key called A *on this board*". The
+/// generic table is the M1 V5 TKL layout, which a 60% board disagrees with past
+/// the alpha block, so the board is asked first.
+fn resolve_keys(keyboard: &KeyboardInterface, keys: &[KeySelector]) -> Result<Vec<u8>, String> {
+    KeySelector::resolve_with(keys, |name| {
+        keyboard.matrix_key_index(name).map(MatrixPos::new)
+    })
+    .map(|positions| positions.into_iter().map(|p| p.get()).collect())
+}
+
+/// How a position is written back to the user: the key's name with its position
+/// in brackets (`A (#9)`), so a printed number is never the only handle on which
+/// key it was, and `#9` alone where the board has no name for that slot.
+fn key_label(keyboard: &KeyboardInterface, key: u8) -> String {
+    let name = keyboard.matrix_key_name(key as usize);
+    if name.is_empty() || name == "?" {
+        format!("#{key}")
+    } else {
+        format!("{name} (#{key})")
+    }
+}
 use std::collections::{BTreeSet, HashSet};
 use std::io::Write;
 use std::sync::atomic::Ordering;
@@ -480,7 +507,11 @@ pub fn triggers(keyboard: &KeyboardInterface) -> CommandResult {
                 for i in 0..10.min(num_keys) {
                     let press = triggers.press_travel.get(i).copied().unwrap_or(0);
                     let mode = triggers.key_modes.get(i).copied().unwrap_or(0);
-                    println!("  Key {:2}: {} mode={}", i, mm(press), mode);
+                    // Name the key, not just its slot: a position on its own
+                    // says nothing about which key it is on the board in front
+                    // of the user, and that is the number they want to act on.
+                    let label = key_label(keyboard, i as u8);
+                    println!("  {label}: {} mode={}", mm(press), mode);
                 }
             }
         }
@@ -703,12 +734,31 @@ pub fn set_top_deadzone(keyboard: &KeyboardInterface, mm: f32) -> CommandResult 
     Ok(())
 }
 
-/// Set trigger settings for a specific key
+/// Set trigger settings for one or more keys
 ///
 /// One optional argument per field the command can change, so the list grows
 /// with the table rather than needing a struct.
 #[allow(clippy::too_many_arguments)]
 pub fn set_key_trigger(
+    keyboard: &KeyboardInterface,
+    keys: &[KeySelector],
+    actuation: Option<f32>,
+    release: Option<f32>,
+    rt_press: Option<f32>,
+    rt_lift: Option<f32>,
+    mode: Option<KeyMode>,
+    rt: Option<bool>,
+) -> CommandResult {
+    for key in resolve_keys(keyboard, keys)? {
+        set_one_key_trigger(
+            keyboard, key, actuation, release, rt_press, rt_lift, mode, rt,
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_one_key_trigger(
     keyboard: &KeyboardInterface,
     key: u8,
     actuation: Option<f32>,
@@ -722,7 +772,10 @@ pub fn set_key_trigger(
     let current = match keyboard.get_key_trigger(key) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Failed to get current settings for key {key}: {e}");
+            eprintln!(
+                "Failed to get current settings for {}: {e}",
+                key_label(keyboard, key)
+            );
             return Ok(());
         }
     };
@@ -754,7 +807,7 @@ pub fn set_key_trigger(
 
     match keyboard.set_key_trigger(&settings) {
         Ok(_) => {
-            println!("Key {key} trigger settings updated:");
+            println!("{} trigger settings updated:", key_label(keyboard, key));
             println!(
                 "  Actuation: {}, Release: {}, Mode: {}  (precision: {})",
                 TravelDepth::from_raw(settings.actuation).format(precision),
@@ -768,7 +821,10 @@ pub fn set_key_trigger(
                 TravelDepth::from_raw(settings.rt_lift).format(precision),
             );
         }
-        Err(e) => eprintln!("Failed to set key trigger: {e}"),
+        Err(e) => eprintln!(
+            "Failed to set trigger for {}: {e}",
+            key_label(keyboard, key)
+        ),
     }
     Ok(())
 }
@@ -786,44 +842,80 @@ pub fn set_mode_all(keyboard: &KeyboardInterface, mode: KeyMode, rt: bool) -> Co
 /// Bind, clear, or show a key's Snap-Tap (SOCD) pairing.
 pub fn set_snaptap(
     keyboard: &KeyboardInterface,
-    key: u8,
-    with: Option<u8>,
+    keys: &[KeySelector],
+    with: Option<&KeySelector>,
     clear: bool,
 ) -> CommandResult {
-    if clear {
-        match keyboard.clear_snaptap(key) {
-            Ok(_) => println!("Cleared Snap-Tap binding for key {key}"),
-            Err(e) => eprintln!("Failed to clear Snap-Tap binding: {e}"),
-        }
-    } else if let Some(partner) = with {
-        match keyboard.set_snaptap_pair(key, partner) {
-            Ok(_) => println!("Bound keys {key} <-> {partner} as a Snap-Tap pair"),
-            Err(e) => eprintln!("Failed to set Snap-Tap pair: {e}"),
-        }
-    } else {
-        match keyboard.get_snaptap_binds() {
-            Ok(binds) => {
-                let partner = binds
-                    .get(key as usize)
-                    .copied()
-                    .unwrap_or(monsgeek_keyboard::SNAPTAP_UNBOUND);
-                if partner == monsgeek_keyboard::SNAPTAP_UNBOUND {
-                    println!("Key {key}: no Snap-Tap binding");
-                } else {
-                    println!("Key {key} is bound to key {partner} (Snap-Tap)");
-                }
+    // The partner has to be one key: a Snap-Tap pair is between two specific
+    // keys, so a selector matching several is a mistake worth reporting.
+    let partner = match with {
+        Some(sel) => match resolve_keys(keyboard, std::slice::from_ref(sel))?.as_slice() {
+            [only] => Some(*only),
+            many => {
+                return Err(format!(
+                    "--with must name exactly one key, but it matched {}",
+                    many.len()
+                )
+                .into());
             }
-            Err(e) => eprintln!("Failed to read Snap-Tap bindings: {e}"),
+        },
+        None => None,
+    };
+
+    for key in resolve_keys(keyboard, keys)? {
+        if clear {
+            match keyboard.clear_snaptap(key) {
+                Ok(_) => println!("Cleared Snap-Tap binding for {}", key_label(keyboard, key)),
+                Err(e) => eprintln!("Failed to clear Snap-Tap binding: {e}"),
+            }
+        } else if let Some(partner) = partner {
+            match keyboard.set_snaptap_pair(key, partner) {
+                Ok(_) => println!(
+                    "Bound {} <-> {} as a Snap-Tap pair",
+                    key_label(keyboard, key),
+                    key_label(keyboard, partner)
+                ),
+                Err(e) => eprintln!("Failed to set Snap-Tap pair: {e}"),
+            }
+        } else {
+            match keyboard.get_snaptap_binds() {
+                Ok(binds) => {
+                    let bound = binds
+                        .get(key as usize)
+                        .copied()
+                        .unwrap_or(monsgeek_keyboard::SNAPTAP_UNBOUND);
+                    if bound == monsgeek_keyboard::SNAPTAP_UNBOUND {
+                        println!("{}: no Snap-Tap binding", key_label(keyboard, key));
+                    } else {
+                        println!(
+                            "{} is bound to {} (Snap-Tap)",
+                            key_label(keyboard, key),
+                            key_label(keyboard, bound)
+                        );
+                    }
+                }
+                Err(e) => eprintln!("Failed to read Snap-Tap bindings: {e}"),
+            }
         }
     }
     Ok(())
 }
 
 /// Set a key's Mod-Tap tap-vs-hold decision time (ms, quantized to 10 ms).
-pub fn set_modtap_time(keyboard: &KeyboardInterface, key: u8, ms: u16) -> CommandResult {
-    match keyboard.set_modtap_time(key, ms) {
-        Ok(_) => println!("Key {key} Mod-Tap decision time set to {}ms", ms / 10 * 10),
-        Err(e) => eprintln!("Failed to set Mod-Tap time: {e}"),
+pub fn set_modtap_time(
+    keyboard: &KeyboardInterface,
+    keys: &[KeySelector],
+    ms: u16,
+) -> CommandResult {
+    for key in resolve_keys(keyboard, keys)? {
+        match keyboard.set_modtap_time(key, ms) {
+            Ok(_) => println!(
+                "{} Mod-Tap decision time set to {}ms",
+                key_label(keyboard, key),
+                ms / 10 * 10
+            ),
+            Err(e) => eprintln!("Failed to set Mod-Tap time: {e}"),
+        }
     }
     Ok(())
 }
@@ -866,12 +958,36 @@ fn parse_dks_actions(spec: &str) -> Result<[DksAction; 4], String> {
 }
 
 /// Show or configure DKS (Dynamic Keystroke) for a key.
+/// Show or configure DKS (Dynamic Keystroke) for one or more keys.
 pub fn dks(
     keyboard: &KeyboardInterface,
-    key: u8,
+    keys: &[KeySelector],
     travel_mm: Option<f32>,
     modes: Option<String>,
     slots: Option<String>,
+    rt: Option<bool>,
+) -> CommandResult {
+    // The spec strings are parsed per key, so the owned inputs are cloned into
+    // the loop rather than consumed by the first key.
+    for key in resolve_keys(keyboard, keys)? {
+        dks_one_key(
+            keyboard,
+            key,
+            travel_mm,
+            modes.as_deref(),
+            slots.as_deref(),
+            rt,
+        )?;
+    }
+    Ok(())
+}
+
+fn dks_one_key(
+    keyboard: &KeyboardInterface,
+    key: u8,
+    travel_mm: Option<f32>,
+    modes: Option<&str>,
+    slots: Option<&str>,
     rt: Option<bool>,
 ) -> CommandResult {
     let setting = travel_mm.is_some() || modes.is_some() || slots.is_some();
@@ -933,7 +1049,7 @@ pub fn dks(
 
     match keyboard.set_dks_config(key, &config, rt) {
         Ok(_) => {
-            println!("DKS configuration written for key {key}");
+            println!("DKS configuration written for {}", key_label(keyboard, key));
             show_dks(keyboard, key)?;
         }
         Err(e) => eprintln!("Failed to set DKS config: {e}"),
@@ -947,7 +1063,7 @@ fn show_dks(keyboard: &KeyboardInterface, key: u8) -> CommandResult {
     match keyboard.get_dks_config(key) {
         Ok(config) => {
             let trigger = keyboard.get_key_trigger(key).ok();
-            println!("DKS config for key {key}:");
+            println!("DKS config for {}:", key_label(keyboard, key));
             if let Some(t) = trigger {
                 println!("  Mode: {}", ModeByte::new(t.mode, t.rapid_trigger));
             }

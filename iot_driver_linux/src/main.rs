@@ -190,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             })?;
         }
         Some(Commands::SetKeyTrigger {
-            key,
+            keys,
             actuation,
             release,
             rt_press,
@@ -201,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mode = mode.map(Into::into);
             commands::with_keyboard_on_profile(&ctx, |kb| {
                 commands::triggers::set_key_trigger(
-                    kb, key, actuation, release, rt_press, rt_lift, mode, rt,
+                    kb, &keys, actuation, release, rt_press, rt_lift, mode, rt,
                 )
             })?;
         }
@@ -211,25 +211,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 commands::triggers::set_mode_all(kb, mode, rt)
             })?;
         }
-        Some(Commands::SetSnaptap { key, with, clear }) => {
+        Some(Commands::SetSnaptap { keys, with, clear }) => {
             commands::with_keyboard_on_profile(&ctx, |kb| {
-                commands::triggers::set_snaptap(kb, key, with, clear)
+                commands::triggers::set_snaptap(kb, &keys, with.as_ref(), clear)
             })?;
         }
-        Some(Commands::SetModtapTime { key, ms }) => {
+        Some(Commands::SetModtapTime { keys, ms }) => {
             commands::with_keyboard_on_profile(&ctx, |kb| {
-                commands::triggers::set_modtap_time(kb, key, ms)
+                commands::triggers::set_modtap_time(kb, &keys, ms)
             })?;
         }
         Some(Commands::Dks {
-            key,
+            keys,
             travel_mm,
             modes,
             slots,
             rt,
         }) => {
             commands::with_keyboard_on_profile(&ctx, |kb| {
-                commands::triggers::dks(kb, key, travel_mm, modes, slots, rt)
+                commands::triggers::dks(kb, &keys, travel_mm, modes, slots, rt)
             })?;
         }
         Some(Commands::DksRoundtrip { key, op }) => {

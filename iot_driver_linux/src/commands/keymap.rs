@@ -6,7 +6,7 @@ use iot_driver::keymap::{self, KeyRef, Layer};
 use iot_driver::keymatrix_view::{self, ListOptions};
 use iot_driver::protocol::hid;
 use monsgeek_keyboard::KeyboardInterface;
-use monsgeek_transport::protocol::{KeymatrixLayer, Profile};
+use monsgeek_transport::protocol::{KeymatrixLayer, MatrixPos, Profile};
 
 /// Remap a key.
 ///
@@ -165,7 +165,10 @@ pub fn keymatrix(
     let selected = if keys.is_empty() {
         Vec::new()
     } else {
-        iot_driver::keyclass::KeySelector::resolve(keys)
+        iot_driver::keyclass::KeySelector::resolve_with(keys, |name| {
+            keyboard.matrix_key_index(name).map(MatrixPos::new)
+        })
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
     };
     let opts = ListOptions {
         layers: layers.iter().map(|&l| l.into()).collect(),

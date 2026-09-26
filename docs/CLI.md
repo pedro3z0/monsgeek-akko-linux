@@ -21,6 +21,31 @@ iot_driver --file capture.pcap      # Replay pcap file (no device needed)
 iot_driver --hex --filter cmd=0x87 led  # Show 0x87 commands in hex
 ```
 
+## Key selectors
+
+Commands that take keys (`set-key-trigger`, `set-snaptap`, `set-modtap-time`,
+`dks`, `remap`, `keymatrix`) accept any of these, comma-separated to address
+several at once:
+
+| Form | Means |
+|------|-------|
+| `A`, `RShift`, `comma` | the key with that name **on the board you have connected** |
+| `#9` | matrix position 9 — for keys this board has no name for |
+| `0..9` | positions 0 through 9 |
+| `alpha`, `digit`, `alnum` | every letter / digit / both |
+| `modifier`, `function`, `nav`, `punct`, `special`, `all` | by class |
+| `!RShift` | subtract the match (only useful combined with a class) |
+
+Names are matched against the connected board's own layout, so `RShift` is your
+board's RShift. This matters: the built-in fallback table is the M1 V5 TKL
+layout, where `RShift` sits at position 82 — on a 60% board it is at 76, and
+silently using the wrong one would configure the wrong key. A name the board
+does not have is an error (with the class list attached), never a guess; use
+`#N` when you mean a specific position.
+
+Punctuation that is awkward in a shell has a name: `comma`, `period`/`dot`,
+`slash`, `backslash`, `minus`/`dash`, `equal`, and the bracket/quote keys.
+
 ## Query Commands
 
 Commands that read device state without modifying it.
@@ -335,12 +360,15 @@ rest are read back from the keyboard first, so this can adjust one key without
 disturbing the rest of the board.
 
 ```bash
-iot_driver set-key-trigger 42 --actuation 1.5
-iot_driver set-key-trigger 42 --release 2.0
-iot_driver set-key-trigger 42 --mode rt
-iot_driver set-key-trigger 42 --actuation 1.0 --mode dks
-iot_driver set-key-trigger 9 --rt-press 0.4 --rt-lift 0.4   # per-key RT sensitivity
+iot_driver set-key-trigger A --actuation 1.5
+iot_driver set-key-trigger RShift --release 1.0
+iot_driver set-key-trigger A --mode rt
+iot_driver set-key-trigger Q --actuation 1.0 --mode dks
+iot_driver set-key-trigger A --rt-press 0.4 --rt-lift 0.4   # per-key RT sensitivity
 ```
+
+Keys are named (`A`, `RShift`, `comma`), or given as a class (`alpha`, `mods`),
+a position (`#9`) or a range (`0..9`) — see [Key selectors](#key-selectors).
 
 `--rt-press` / `--rt-lift` set this key's Rapid-Trigger sensitivity only
 (`set-rt` remains the board-wide fan-out). To give one key a standard-RT
