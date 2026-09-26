@@ -273,21 +273,24 @@ iot_driver tui
 <video src="iot_driver_linux/tui-demo.webm" controls width="100%"></video>
 
 **TUI Features:**
-- Tab navigation between Device Info, LED Settings, Key Depth, Triggers, Options, Macros
+- Four tabs: Device Info, Key Depth, Key Mapping, Notify
 - Real-time key depth visualization (bar chart and time series)
 - Visual keyboard layout for per-key trigger settings
 - Arrow keys to adjust values, Enter to confirm
+- `?` opens the full keybinding list at any time
 
 **Key Depth Tab:**
 - `v` - Toggle between bar chart and time series view
 - `Space` - Select key for time series tracking
 - `x` - Clear depth history
 
-**Triggers Tab:**
+**Key Mapping Tab:**
 - `v` - Toggle between list and keyboard layout view
-- Arrow keys - Navigate keys in layout view
-- `n/t/d/s` - Set mode (Normal/RT/DKS/SnapTap) for selected key
-- `N/T/D/S` - Set mode for ALL keys
+- `Enter`/`e` - Edit the selected key, `g` - edit all keys at once
+- `s` - Cycle the sort order
+- `f` - Filter by layer (all / L0 / L1 / Fn)
+- In the editor: `Enter` acts on the focused field (opens its picker, flips
+  it, or saves), `Ctrl+s` saves and closes, `Esc` closes without saving
 
 ### Web App (app.monsgeek.com)
 

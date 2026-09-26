@@ -200,6 +200,12 @@ const POLLING_RATE_NO_CONTROL: &[(&str, i32)] = &[("HawkGamingHK610S", 3677)];
 
 /// Models exempt from the firmware version gate — they implement the command on older
 /// firmware. Transcribed from the vendor app; extend as new exceptions appear there.
+///
+/// The last entry is not transcribed: it was measured. The FUN60 Pro answers
+/// `SET_REPORT`/`GET_REPORT` on v309, well below the 0x0400 gate — see section 3.1
+/// of docs/FUN60_PRO.md, where a 4000 -> 8000 Hz write was accepted and read
+/// back. (That setting is stored and round-trips; whether it changes anything
+/// observable is a separate, still-open question — the same section.)
 const POLLING_RATE_NO_VERSION_GATE: &[(&str, i32)] = &[
     ("rongyuan", 3195),
     ("rongyuan", 2342),
@@ -231,6 +237,9 @@ const POLLING_RATE_NO_VERSION_GATE: &[(&str, i32)] = &[
     ("蚂蚁电竞", 2281),
     ("蚂蚁电竞", 2516),
     ("蚂蚁电竞", 1846),
+    // Measured, not transcribed: the FUN60 Pro (device id 2304) takes and returns
+    // the rate on v309, so the 0x0400 gate hides a control the board does have.
+    ("MonsGeek", 2304),
 ];
 
 /// Wrapper for the versioned devices.json format
@@ -873,6 +882,19 @@ mod tests {
             keyboard_with("HawkGamingHK610S", 3677, Some(8000)).polling_rate_support(false),
             Unsupported
         );
+
+        // The FUN60 Pro (id 2304) is below the 0x0400 gate but does answer
+        // SET_REPORT/GET_REPORT on v309 — measured, docs/FUN60_PRO.md 3.1 — so
+        // the gate must not hide a control the board actually has.
+        let fun60pro = keyboard_with("MonsGeek", 2304, Some(8000));
+        assert_eq!(fun60pro.polling_rate_support(false), Always);
+        assert!(fun60pro.polling_rate_support(false).is_available(0x0309));
+        // Still never over Bluetooth, and never faster than the model's maximum.
+        assert_eq!(fun60pro.polling_rate_support(true), Unsupported);
+        assert_eq!(
+            fun60pro.polling_rates(),
+            &[8000, 4000, 2000, 1000, 500, 250, 125]
+        );
     }
 
     #[test]
@@ -1088,6 +1110,32 @@ mod tests {
         let fn_layer = dev.fn_sys_layer.as_ref().unwrap();
         assert_eq!(fn_layer.win, 2);
         assert_eq!(fn_layer.mac, 2);
+    }
+
+    #[test]
+    fn the_connected_board_keeps_its_polling_control() {
+        // The gate above is exercised on a synthetic definition; this one checks
+        // the entry the FUN60 Pro actually resolves to at runtime. If the
+        // device database is regenerated and its id or company string moves, the
+        // exception stops matching and the TUI goes back to showing "unsupported"
+        // — this fails first.
+        let db = DeviceDatabase::load_from_file("../data/devices.json")
+            .or_else(|_| DeviceDatabase::load_from_file("data/devices.json"))
+            .expect("devices.json not found next to the crate or under data/");
+
+        let fun60pro = db
+            .find_by_id(2304)
+            .expect("FUN60 Pro (device id 2304) missing from the device database");
+        assert_eq!(fun60pro.company.as_deref(), Some("MonsGeek"));
+        assert_eq!(fun60pro.vid, 0x3151);
+        assert_eq!(fun60pro.pid, 0x502d);
+
+        // v309 is the firmware this was measured on, well below the 0x0400 gate.
+        assert!(
+            fun60pro.polling_rate_support(false).is_available(0x0309),
+            "polling rate must stay offered on v309 — see docs/FUN60_PRO.md 3.1"
+        );
+        assert_eq!(fun60pro.polling_rates().first(), Some(&8000));
     }
 
     #[test]

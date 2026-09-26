@@ -65,6 +65,14 @@ this shows. Codes: 0 = 8000, 1 = 4000, 2 = 2000, 3 = 1000, 4 = 500, 5 = 250,
 6 = 125 Hz. 8000 Hz is this model's documented maximum (`reportRate` in the
 device database).
 
+Because the command demonstrably exists on v309, this model is an explicit
+exception to the 0x0400 firmware gate in `polling_rate_support`
+(`iot_driver_linux/src/device_loader.rs`): without it the TUI hid the control and
+showed "unsupported" on a board that answers. The exception is marked in the
+source as measured rather than transcribed, since it comes from this section and
+not from the vendor app. The caveat in the next section still stands — offering
+the setting is not a claim that it changes the report rate.
+
 **3.2 The travel stream does not track it.** Reading the vendor input
 collection while keys move, at three settings, 5 s each:
 
@@ -252,6 +260,7 @@ gap is visible rather than implied.
 | `0x80` RT flag kept orthogonal to the base mode, unknown bases preserved | `KeyMode` / `ModeByte` (`monsgeek-keyboard/src/magnetism.rs`) | yes |
 | Polling rate code at frame[2] | `POLLING_RATE_FRAME_OFFSET` (`monsgeek-keyboard/src/lib.rs`) | yes |
 | Rate capped at the model's maximum (8000 Hz here) | `reportRate` in the device database | yes |
+| Control offered below the 0x0400 gate, per 3.1 | `("MonsGeek", 2304)` in `POLLING_RATE_NO_VERSION_GATE` (`iot_driver_linux/src/device_loader.rs`) | yes |
 | KBOPTION layout, including 25 ms RT-stability steps | `KeyboardOptions` (`monsgeek-keyboard/src/settings.rs`) | yes |
 | This model's board facts | `data/devices.json` / `data/device_matrices.json`: id 2304, 61 keys, 4 layers, magnetism, 8000 Hz, matrix `ry5088_akko_fun60pro_1m_8k` | yes |
 

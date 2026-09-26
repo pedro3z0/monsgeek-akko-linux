@@ -3,15 +3,20 @@
 use ratatui::{prelude::*, widgets::*};
 
 /// Context in which a keybind is active
+///
+/// One variant per place input is actually handled, so a binding cannot end up
+/// filed under a context that no longer exists. Names follow `App::tab` (see the
+/// tab titles in `tui::mod`), plus `TriggerEdit` for the modal that opens over
+/// whichever tab launched it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum KeyContext {
-    Global,   // Available everywhere
-    Info,     // Device Info tab (0)
-    Depth,    // Key Depth tab (1)
-    Triggers, // Trigger Settings tab (2)
-    Remaps,   // Remaps tab (3)
+    Global,      // Available everywhere
+    Info,        // Device Info tab (0)
+    Depth,       // Key Depth tab (1)
+    KeyMapping,  // Key Mapping tab (2)
+    TriggerEdit, // Per-key / all-keys edit modal
     #[cfg(feature = "notify")]
-    Notify, // Notify tab (4)
+    Notify, // Notify tab (3)
 }
 
 /// A single keybinding definition
@@ -21,12 +26,27 @@ pub(crate) struct Keybind {
     pub context: KeyContext,
 }
 
-/// All TUI keybindings - single source of truth
+/// All TUI keybindings — single source of truth
+///
+/// Transcribed from the input handler in `tui::mod` (and `tabs::notify`), so it
+/// lists what the TUI actually does rather than what it once did. Two rules
+/// keep that honest:
+///
+/// * a binding is filed under the context whose `match` arm implements it, and
+/// * anything the handler swallows without an effect is not listed at all.
+///
+/// When you add or move a key, update this in the same change — a help popup
+/// that advertises a dead key, or omits a live one, is worse than none.
 pub(crate) const TUI_KEYBINDS: &[Keybind] = &[
-    // Global keybindings
+    // ── Global ──
     Keybind {
-        keys: "q / Esc",
-        description: "Quit application",
+        keys: "q",
+        description: "Quit",
+        context: KeyContext::Global,
+    },
+    Keybind {
+        keys: "Esc",
+        description: "Close the top layer (help, hex entry, modal, picker)",
         context: KeyContext::Global,
     },
     Keybind {
@@ -35,33 +55,38 @@ pub(crate) const TUI_KEYBINDS: &[Keybind] = &[
         context: KeyContext::Global,
     },
     Keybind {
-        keys: "Tab",
-        description: "Next tab",
+        keys: "Tab / Shift+Tab",
+        description: "Next / previous tab",
         context: KeyContext::Global,
     },
     Keybind {
-        keys: "Shift+Tab",
-        description: "Previous tab",
+        keys: "Alt+1..5",
+        description: "Jump straight to a tab",
         context: KeyContext::Global,
     },
     Keybind {
-        keys: "↑ / k",
-        description: "Navigate up",
+        keys: "↑ / k, ↓ / j",
+        description: "Move the selection",
         context: KeyContext::Global,
     },
     Keybind {
-        keys: "↓ / j",
-        description: "Navigate down",
+        keys: "← / h, → / l",
+        description: "Decrease / increase the selected value",
         context: KeyContext::Global,
     },
     Keybind {
-        keys: "← / h",
-        description: "Navigate left / decrease",
+        keys: "Shift+← / →",
+        description: "Coarser step (±10 on RGB, ×10 on spinners)",
         context: KeyContext::Global,
     },
     Keybind {
-        keys: "→ / l",
-        description: "Navigate right / increase",
+        keys: "Ctrl+1..4",
+        description: "Switch to profile 1-4",
+        context: KeyContext::Global,
+    },
+    Keybind {
+        keys: "Ctrl+p",
+        description: "Cycle to the next profile",
         context: KeyContext::Global,
     },
     Keybind {
@@ -71,7 +96,7 @@ pub(crate) const TUI_KEYBINDS: &[Keybind] = &[
     },
     Keybind {
         keys: "c",
-        description: "Connect to device",
+        description: "Reconnect to the device",
         context: KeyContext::Global,
     },
     Keybind {
@@ -81,138 +106,142 @@ pub(crate) const TUI_KEYBINDS: &[Keybind] = &[
     },
     Keybind {
         keys: "m",
-        description: "Toggle depth monitoring",
+        description: "Toggle key-depth monitoring",
         context: KeyContext::Global,
     },
-    Keybind {
-        keys: "Ctrl+1-4",
-        description: "Switch profile 1-4",
-        context: KeyContext::Global,
-    },
-    Keybind {
-        keys: "PgUp/PgDn",
-        description: "Fast scroll (15 items)",
-        context: KeyContext::Global,
-    },
-    // Info tab
+    // ── Device Info tab ──
     Keybind {
         keys: "p",
-        description: "Apply per-key LED color",
+        description: "Apply the per-key LED colour to the board",
         context: KeyContext::Info,
     },
     Keybind {
-        keys: "Shift+←/→",
-        description: "Coarse adjust (±10 for RGB)",
+        keys: "#",
+        description: "Type a hex colour on a colour field (then Enter)",
         context: KeyContext::Info,
     },
-    // Depth tab
+    Keybind {
+        keys: "Enter / Backspace",
+        description: "Confirm / erase in hex-colour entry",
+        context: KeyContext::Info,
+    },
+    // ── Key Depth tab ──
     Keybind {
         keys: "v",
-        description: "Toggle visualization mode",
-        context: KeyContext::Depth,
-    },
-    Keybind {
-        keys: "x",
-        description: "Clear depth data",
+        description: "Toggle bar chart / time series",
         context: KeyContext::Depth,
     },
     Keybind {
         keys: "Space",
-        description: "Pause/resume monitoring",
+        description: "Select/deselect the key tracked in the time series",
         context: KeyContext::Depth,
     },
-    // Triggers tab
+    Keybind {
+        keys: "x",
+        description: "Clear depth history",
+        context: KeyContext::Depth,
+    },
+    // ── Key Mapping tab ──
     Keybind {
         keys: "v",
-        description: "Toggle list/layout view",
-        context: KeyContext::Triggers,
+        description: "Toggle list / keyboard-layout view",
+        context: KeyContext::KeyMapping,
+    },
+    Keybind {
+        keys: "s",
+        description: "Cycle the sort order",
+        context: KeyContext::KeyMapping,
     },
     Keybind {
         keys: "Enter / e",
-        description: "Edit selected key",
-        context: KeyContext::Triggers,
+        description: "Edit the selected key",
+        context: KeyContext::KeyMapping,
     },
     Keybind {
         keys: "g",
-        description: "Edit global (all keys)",
-        context: KeyContext::Triggers,
+        description: "Edit all keys at once",
+        context: KeyContext::KeyMapping,
     },
     Keybind {
-        keys: "n / N",
-        description: "Normal mode (key/all)",
-        context: KeyContext::Triggers,
-    },
-    Keybind {
-        keys: "t / T",
-        description: "RT mode (key/all)",
-        context: KeyContext::Triggers,
-    },
-    Keybind {
-        keys: "d / D",
-        description: "DKS mode (key/all)",
-        context: KeyContext::Triggers,
-    },
-    Keybind {
-        keys: "s / S",
-        description: "SnapTap mode (key/all)",
-        context: KeyContext::Triggers,
-    },
-    // Remaps tab
-    Keybind {
-        keys: "e",
-        description: "Edit remap target",
-        context: KeyContext::Remaps,
-    },
-    Keybind {
-        keys: "d",
-        description: "Reset key to default",
-        context: KeyContext::Remaps,
-    },
-    Keybind {
-        keys: "m",
-        description: "Open macro editor",
-        context: KeyContext::Remaps,
+        keys: "PgUp / PgDn",
+        description: "Jump ten rows",
+        context: KeyContext::KeyMapping,
     },
     Keybind {
         keys: "f",
-        description: "Toggle layer filter",
-        context: KeyContext::Remaps,
+        description: "Open the layer filter (Esc/Enter closes it)",
+        context: KeyContext::KeyMapping,
     },
-    // Notify tab
-    #[cfg(feature = "notify")]
+    // ── Trigger edit modal ──
     Keybind {
-        keys: "n",
-        description: "Toggle daemon start/stop",
-        context: KeyContext::Notify,
+        keys: "Esc",
+        description: "Close without saving",
+        context: KeyContext::TriggerEdit,
     },
-    #[cfg(feature = "notify")]
+    Keybind {
+        keys: "Enter",
+        description: "Act on the focused field: open its picker, flip it, or save",
+        context: KeyContext::TriggerEdit,
+    },
+    Keybind {
+        keys: "Ctrl+s",
+        description: "Save and close",
+        context: KeyContext::TriggerEdit,
+    },
+    Keybind {
+        keys: "Tab / ↓, Shift+Tab / ↑",
+        description: "Next / previous field",
+        context: KeyContext::TriggerEdit,
+    },
+    Keybind {
+        keys: "← / h, → / l",
+        description: "Change the field (Shift for a coarse step)",
+        context: KeyContext::TriggerEdit,
+    },
+    Keybind {
+        keys: "type / Backspace",
+        description: "Filter the open picker / erase a character",
+        context: KeyContext::TriggerEdit,
+    },
+    Keybind {
+        keys: "Tab (in a picker)",
+        description: "Add the highlighted key as a chord modifier",
+        context: KeyContext::TriggerEdit,
+    },
+    // ── Notify tab ──
     Keybind {
         keys: "p",
-        description: "Toggle hardware preview",
+        description: "Preview the effect on the keyboard",
         context: KeyContext::Notify,
     },
-    #[cfg(feature = "notify")]
     Keybind {
         keys: "s",
+        description: "Start/stop the notify daemon",
+        context: KeyContext::Notify,
+    },
+    Keybind {
+        keys: "c",
+        description: "Clear all animations",
+        context: KeyContext::Notify,
+    },
+    Keybind {
+        keys: "w",
         description: "Save effects.toml",
         context: KeyContext::Notify,
     },
-    #[cfg(feature = "notify")]
+    Keybind {
+        keys: "a / x / Delete",
+        description: "Add / delete keyframe",
+        context: KeyContext::Notify,
+    },
     Keybind {
         keys: "Enter",
         description: "Edit keyframes / confirm",
         context: KeyContext::Notify,
     },
-    #[cfg(feature = "notify")]
     Keybind {
-        keys: "a / x",
-        description: "Add / delete keyframe",
-        context: KeyContext::Notify,
-    },
-    #[cfg(feature = "notify")]
-    Keybind {
-        keys: "Tab",
-        description: "Switch focus / edit variables",
+        keys: "Tab / Shift+Tab",
+        description: "Move focus (list → keyframes → variables)",
         context: KeyContext::Notify,
     },
 ];
@@ -293,8 +322,8 @@ pub(crate) fn render_help_popup(f: &mut Frame, area: Rect) {
                 KeyContext::Global => "Global",
                 KeyContext::Info => "Info Tab",
                 KeyContext::Depth => "Depth Tab",
-                KeyContext::Triggers => "Triggers Tab",
-                KeyContext::Remaps => "Remaps Tab",
+                KeyContext::KeyMapping => "Key Mapping Tab",
+                KeyContext::TriggerEdit => "Trigger Edit Modal",
                 #[cfg(feature = "notify")]
                 KeyContext::Notify => "Notify Tab",
             };
@@ -375,4 +404,78 @@ pub(crate) fn render_help_popup(f: &mut Frame, area: Rect) {
         )
         .wrap(Wrap { trim: false });
     f.render_widget(kb_help, columns[1]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Render the help popup into a fixed-size buffer and return it as plain text.
+    ///
+    /// The table is data, so the only way it rots is quietly: a context that
+    /// stops rendering a header, a key that is implemented but unlisted, or a
+    /// listing for a handler that no longer exists. These tests read the real
+    /// rendered output rather than the constant, so they notice both.
+    fn rendered(width: u16, height: u16) -> String {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test backend");
+        terminal
+            .draw(|f| render_help_popup(f, f.area()))
+            .expect("draw help popup");
+        let buf = terminal.backend().buffer().clone();
+        buf.content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .chunks(width as usize)
+            .map(|row| row.iter().copied().collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn every_context_gets_a_header() {
+        let text = rendered(200, 120);
+        for header in [
+            "── Global ──",
+            "── Info Tab ──",
+            "── Depth Tab ──",
+            "── Key Mapping Tab ──",
+            "── Trigger Edit Modal ──",
+            #[cfg(feature = "notify")]
+            "── Notify Tab ──",
+        ] {
+            assert!(text.contains(header), "missing section header: {header}");
+        }
+    }
+
+    #[test]
+    fn binds_implemented_by_the_handler_are_listed() {
+        // Keys the input handler acts on but which this table once omitted or
+        // described wrongly. If one is dropped, the help is lying again.
+        let text = rendered(200, 120);
+        for (key, why) in [
+            ("Ctrl+p", "cycles profiles, same as Ctrl+1..4"),
+            ("Alt+1..5", "jumps straight to a tab"),
+            ("#", "starts hex-colour entry on a colour field"),
+            ("Backspace", "erases a hex digit or a picker filter"),
+            ("Delete", "deletes a keyframe in the Notify tab"),
+            ("Cycle the sort order", "'s' sorts; it does not set a mode"),
+            ("Select/deselect", "Space tracks a key, it does not pause"),
+        ] {
+            assert!(text.contains(key), "{key} is undocumented ({why})");
+        }
+    }
+
+    #[test]
+    fn no_listing_for_handlers_that_no_longer_exist() {
+        // The Triggers/Remaps tabs were replaced by the Key Mapping tab and the
+        // edit modal; their bindings must not linger in the popup.
+        let text = rendered(200, 120);
+        for gone in ["Triggers Tab", "Remaps Tab", "SnapTap mode", "macro editor"] {
+            assert!(!text.contains(gone), "help still advertises {gone}");
+        }
+    }
 }
