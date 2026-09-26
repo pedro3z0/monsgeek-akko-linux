@@ -498,4 +498,41 @@ mod tests {
         );
         assert_eq!(KeyboardOptions::from_bytes(&[]), KeyboardOptions::default());
     }
+
+    /// Stock fw v309 answers GET_FEATURE_LIST with a stub that carries no 0xAA
+    /// marker and a zero precision byte — the reference dumps read
+    /// `E6 00 00 00 00 00 00 19 00 …`, echoed here minus the command byte.
+    /// Precision must come out invalid so callers fall back to the version
+    /// word instead of reporting 0.1 mm for a board that steps 0.01 mm.
+    #[test]
+    fn feature_list_stub_is_invalid_so_precision_falls_back() {
+        // Frame after the echo: no marker, zeros, an 0x19 at index 6.
+        let stub = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x19, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let features = FeatureList::from_bytes(&stub);
+        assert!(!features.is_valid());
+        assert!(features.precision().is_none());
+    }
+
+    /// A well-formed response keeps its precision byte behind the marker.
+    #[test]
+    fn feature_list_marker_gates_the_precision_byte() {
+        let valid = FeatureList::from_bytes(&[0xAA, 0x00, 0x00, 0x00]);
+        assert!(valid.is_valid());
+        assert_eq!(valid.precision(), Some(Precision::Coarse));
+
+        let fine = FeatureList::from_bytes(&[0xAA, 0x02, 0x00, 0x00]);
+        assert_eq!(fine.precision(), Some(Precision::Fine));
+    }
+
+    /// The version-word fallback: v309 (0x0309 >= 768) means 0.01 mm steps —
+    /// the number `triggers` reports on this board, and the one `all` must
+    /// print when the feature list is the stub above.
+    #[test]
+    fn fw_v309_version_word_means_medium_precision() {
+        let v = FirmwareVersion::new(0x0309);
+        assert_eq!(v.precision(), Precision::Medium);
+        assert_eq!(v.precision_str(), "0.01mm");
+    }
 }

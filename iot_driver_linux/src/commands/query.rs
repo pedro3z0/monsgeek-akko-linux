@@ -281,11 +281,22 @@ pub fn sleep(keyboard: &monsgeek_keyboard::KeyboardInterface) -> CommandResult {
 
 /// Show all device information
 pub fn all(ctx: &CmdCtx) -> CommandResult {
-    println!("MonsGeek M1 V5 HE - Device Information");
-    println!("======================================\n");
-
     let transport = open_preferred_transport(ctx)?;
     let info = transport.device_info();
+
+    // Name the banner after *this* board. The firmware device id is the real
+    // discriminator (PID 0x502d alone is shared by ~46 database entries), so
+    // resolve the display name through it, with the USB product string as a
+    // fallback. This used to hardcode "MonsGeek M1 V5 HE" on every device.
+    let name = super::query_device_id(&transport)
+        .and_then(|id| iot_driver::devices::get_device_info_with_id(Some(id), info.vid, info.pid))
+        .map(|d| d.display_name)
+        .or_else(|| info.product_name.clone())
+        .unwrap_or_else(|| "MonsGeek Keyboard".to_string());
+    let title = format!("{name} - Device Information");
+    println!("{title}");
+    println!("{}\n", "=".repeat(title.len()));
+
     println!(
         "Device: VID={:04X} PID={:04X} type={:?}\n",
         info.vid, info.pid, info.transport_type
@@ -304,7 +315,7 @@ pub fn all(ctx: &CmdCtx) -> CommandResult {
     for (cmd_byte, name) in commands {
         print!("{name}: ");
         match transport.query_command(cmd_byte, &[], ChecksumType::Bit7) {
-            Ok(resp) => format_command_response(cmd_byte, &resp),
+            Ok(resp) => format_command_response(cmd_byte, &resp, &transport),
             Err(e) => println!("Error: {e}"),
         }
         println!();

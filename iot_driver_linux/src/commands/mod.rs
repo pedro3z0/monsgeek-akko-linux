@@ -32,7 +32,7 @@ pub mod userpic;
 pub mod utility;
 
 use iot_driver::protocol::{self, cmd};
-use monsgeek_keyboard::settings::FirmwareVersion;
+use monsgeek_keyboard::settings::{FeatureList, FirmwareVersion};
 use monsgeek_transport::protocol::Profile;
 use monsgeek_transport::{
     DeviceDiscovery, FlowControlTransport, HidDiscovery, HidResponse, PacketFilter, PrinterConfig,
@@ -369,7 +369,9 @@ pub fn open_preferred_transport(
 
 /// Format and print a command response from the transport layer
 /// `resp` is the response data (64 bytes, first byte is command echo)
-pub fn format_command_response(cmd_byte: u8, resp: &[u8]) {
+/// `transport` lets a response that does not carry enough information on its
+/// own fall back to another query — see `GET_FEATURE_LIST` below.
+pub fn format_command_response(cmd_byte: u8, resp: &[u8], transport: &FlowControlTransport) {
     println!("\nResponse (0x{:02x} = {}):", resp[0], cmd::name(resp[0]));
 
     // Response offsets: resp[0] = cmd echo, resp[1..] = data
@@ -421,8 +423,19 @@ pub fn format_command_response(cmd_byte: u8, resp: &[u8]) {
             println!("  WASD Swap:  {}", opts.wasd_swap);
         }
         cmd::GET_FEATURE_LIST => {
-            println!("  Features:   {:02x?}", &resp[1..11]);
-            let precision = FirmwareVersion::precision_byte_str(resp[2]);
+            println!("  Features:   {:02x?}", &resp[1..11.min(resp.len())]);
+            // The precision byte only counts behind FeatureList's 0xAA validity
+            // marker. Stock fw v309 answers a stub — no marker, zero byte (the
+            // reference dumps read `E6 00 00 00 00 00 00 19 00 …`) — which
+            // naively reading as resp[2] printed "0.1mm" for a board that steps
+            // 0.01 mm. Fall back to the firmware version word, the same fallback
+            // `KeyboardInterface::get_precision` uses for `triggers`.
+            let features = FeatureList::from_bytes(&resp[1..]);
+            let precision = if features.is_valid() {
+                FirmwareVersion::precision_byte_str(features.precision).to_string()
+            } else {
+                precision_from_firmware_version(transport)
+            };
             println!("  Precision:  {precision}");
         }
         cmd::GET_SLEEPTIME => {
@@ -433,6 +446,28 @@ pub fn format_command_response(cmd_byte: u8, resp: &[u8]) {
             println!("  Raw data:   {:02x?}", &resp[..16.min(resp.len())]);
         }
     }
+}
+
+/// Travel precision implied by the firmware version word.
+///
+/// The version word is the fallback source whenever `GET_FEATURE_LIST` is a
+/// stub: >= 768 (0x300) means 0.01 mm steps, >= 1280 (0x500) 0.005 mm — the
+/// same thresholds `Precision::from_firmware_version` applies. Returns
+/// `"unknown"` if the identity query fails or comes back malformed.
+fn precision_from_firmware_version(transport: &FlowControlTransport) -> String {
+    transport
+        .query_command(
+            cmd::GET_USB_VERSION,
+            &[],
+            monsgeek_transport::ChecksumType::Bit7,
+        )
+        .ok()
+        .filter(|r| r.len() >= 9 && r[0] == cmd::GET_USB_VERSION)
+        .map(|r| {
+            let version = u16::from_le_bytes([r[7], r[8]]);
+            FirmwareVersion::new(version).precision_str().to_string()
+        })
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Profile the keyboard must be put back on, if a command switched it.

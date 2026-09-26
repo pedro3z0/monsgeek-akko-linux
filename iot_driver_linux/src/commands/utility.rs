@@ -47,7 +47,7 @@ pub fn raw(cmd_str: &str, ctx: &CmdCtx) -> CommandResult {
     );
 
     let resp = transport.query_command(cmd, &[], ChecksumType::Bit7)?;
-    format_command_response(cmd, &resp);
+    format_command_response(cmd, &resp, &transport);
     Ok(())
 }
 
