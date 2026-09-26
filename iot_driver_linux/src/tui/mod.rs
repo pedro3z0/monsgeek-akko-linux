@@ -132,6 +132,11 @@ struct App {
     // Empty/Unsupported means the TUI shows the field as unavailable instead of editable.
     polling_rate_support: crate::device_loader::PollingRateSupport,
     polling_rates: &'static [u16],
+    // USB identity of the open device, kept so the polling-rate verdict can be
+    // recomputed once the firmware device id arrives (see refresh_polling_rate_support).
+    usb_vid: u16,
+    usb_pid: u16,
+    transport_type: monsgeek_transport::TransportType,
     // Help popup
     show_help: bool,
     // Device picker popup
@@ -242,6 +247,9 @@ impl App {
             is_wireless: false,
             polling_rate_support: crate::device_loader::PollingRateSupport::Unsupported,
             polling_rates: &[],
+            usb_vid: 0,
+            usb_pid: 0,
+            transport_type: monsgeek_transport::TransportType::HidWired,
             // Help popup
             show_help: false,
             // Device picker popup
@@ -446,6 +454,9 @@ impl App {
         self.is_wireless = is_wireless;
         self.polling_rate_support = polling_rate_support;
         self.polling_rates = polling_rates;
+        self.usb_vid = vid;
+        self.usb_pid = pid;
+        self.transport_type = transport_info.transport_type;
         self.keyboard = Some(keyboard);
 
         // Initialize key depths array based on actual key count
@@ -618,6 +629,9 @@ impl App {
                 self.is_wireless = is_wireless;
                 self.polling_rate_support = polling_rate_support;
                 self.polling_rates = polling_rates;
+                self.usb_vid = vid;
+                self.usb_pid = pid;
+                self.transport_type = transport_info.transport_type;
                 self.keyboard = Some(keyboard);
 
                 self.key_depths = vec![0.0; self.key_count as usize];
@@ -686,6 +700,32 @@ impl App {
         });
     }
 
+    /// Re-decide the polling-rate control now that the firmware device id is known.
+    ///
+    /// The connect-time lookup has to run before the key matrix is sized, so it may
+    /// not have the id yet — and `0x3151:0x502d` is claimed by dozens of products,
+    /// so guessing from the USB IDs alone can describe a different board entirely.
+    /// The id that arrives with the version query is authoritative, so the verdict
+    /// is recomputed here rather than left at whatever the guess produced.
+    ///
+    /// Returns true when the control has just become available, so the caller can go
+    /// read the stored rate.
+    fn refresh_polling_rate_support(&mut self, device_id: u32) -> bool {
+        let (support, rates) = resolve_polling_rate(
+            i32::try_from(device_id).ok(),
+            self.usb_vid,
+            self.usb_pid,
+            self.transport_type,
+        );
+        let was_available = self.polling_rate_support.is_available(self.info.version);
+        self.polling_rate_support = support;
+        // The TUI cycles through this list, so it is the copy that matters here; the
+        // one inside the (shared, immutable) keyboard object is only a ceiling check
+        // on writes, and every rate cycled is already drawn from this list.
+        self.polling_rates = rates;
+        support.is_available(self.info.version) && !was_available
+    }
+
     /// Process async result from background tasks
     fn process_async_result(&mut self, result: AsyncResult) {
         match result {
@@ -693,6 +733,11 @@ impl App {
                 self.info.device_id = device_id;
                 self.info.version = ver.raw;
                 self.loading.usb_version = LoadState::Loaded;
+                // The id is only trustworthy now, and it may name a different model
+                // than the connect-time guess did.
+                if self.refresh_polling_rate_support(device_id) {
+                    self.load_polling_rate();
+                }
             }
             AsyncResult::DeviceIdAndVersion(Err(_)) => {
                 self.loading.usb_version = LoadState::Error;

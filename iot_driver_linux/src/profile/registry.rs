@@ -78,6 +78,19 @@ impl ProfileRegistry {
             .and_then(|db| db.find_by_vid_pid(vid, pid).into_iter().next())
     }
 
+    /// Every product in the database that claims this VID/PID.
+    ///
+    /// The rebranded 8 kHz boards all ship as the same USB pair — 3151:502d is
+    /// claimed by 56 products in the current database — so a caller that only
+    /// knows the USB IDs must check the count before treating any one of them as
+    /// *the* device. See [`Self::get_device_info`], which returns an arbitrary one.
+    pub fn devices_for_usb(&self, vid: u16, pid: u16) -> Vec<&JsonDeviceDefinition> {
+        self.device_db
+            .as_ref()
+            .map(|db| db.find_by_vid_pid(vid, pid))
+            .unwrap_or_default()
+    }
+
     /// Get device info from the database by firmware device ID (from GET_USB_VERSION)
     /// This is the correct lookup — the device ID comes from the keyboard itself.
     /// Returns `None` for the few IDs shared by several products; pass the USB IDs to

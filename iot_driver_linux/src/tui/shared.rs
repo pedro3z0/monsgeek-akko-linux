@@ -34,6 +34,11 @@ pub(crate) fn transport_type_name(tt: TransportType) -> &'static str {
 /// Returns the support requirement plus the rates it accepts, fastest first. Unknown
 /// devices get no control rather than the full rate list, since writing a rate the
 /// firmware does not implement has no defined behaviour.
+///
+/// The firmware device id is what identifies the model. `0x3151:0x502d` alone does
+/// not: 56 products in the current database claim it, so that fallback is only taken
+/// when exactly one product does — otherwise the answer would describe whichever
+/// board happened to be listed first.
 pub(crate) fn resolve_polling_rate(
     device_id: Option<i32>,
     vid: u16,
@@ -41,10 +46,16 @@ pub(crate) fn resolve_polling_rate(
     transport: TransportType,
 ) -> (PollingRateSupport, &'static [u16]) {
     let registry = crate::profile_registry();
-    let Some(def) = device_id
+    let def = device_id
         .and_then(|id| registry.get_device_info_by_id_and_usb(id, vid, pid))
-        .or_else(|| registry.get_device_info(vid, pid))
-    else {
+        .or_else(|| {
+            let claimants = registry.devices_for_usb(vid, pid);
+            match claimants.as_slice() {
+                [only] => Some(*only),
+                _ => None,
+            }
+        });
+    let Some(def) = def else {
         return (PollingRateSupport::Unsupported, &[]);
     };
     let over_bluetooth = transport == TransportType::Bluetooth;
@@ -403,5 +414,58 @@ mod spinner_tests {
         );
         assert_eq!(cfg.format(204), "2.04");
         assert_eq!(cfg.unit(), "mm");
+    }
+}
+
+#[cfg(test)]
+mod polling_tests {
+    use super::*;
+    use crate::device_loader::PollingRateSupport;
+
+    /// 0x3151:0x502d is the USB pair on the rebranded 8 kHz boards, and the
+    /// database has dozens of products claiming it. Answering from the USB IDs
+    /// alone would describe whichever board is listed first — here an AttackShark,
+    /// not the FUN60 Pro attached — so without the firmware id the answer must be
+    /// "don't know" rather than a verdict about someone else's keyboard.
+    #[test]
+    fn an_ambiguous_usb_pair_yields_no_verdict() {
+        let registry = crate::profile_registry();
+        let claimants = registry.devices_for_usb(0x3151, 0x502d);
+        assert!(
+            claimants.len() > 1,
+            "expected 3151:502d to stay ambiguous, found {} claimant(s)",
+            claimants.len()
+        );
+
+        let (support, rates) = resolve_polling_rate(None, 0x3151, 0x502d, TransportType::HidWired);
+        assert_eq!(support, PollingRateSupport::Unsupported);
+        assert!(rates.is_empty());
+    }
+
+    /// With the id the board reports, the same lookup names the right model.
+    #[test]
+    fn the_firmware_id_identifies_the_attached_board() {
+        let registry = crate::profile_registry();
+        let def = registry
+            .get_device_info_by_id_and_usb(2304, 0x3151, 0x502d)
+            .expect("FUN60 Pro not in the device database");
+        assert_eq!(def.display_name, "FUN60 PRO");
+
+        let (support, rates) =
+            resolve_polling_rate(Some(2304), 0x3151, 0x502d, TransportType::HidWired);
+        assert_eq!(support, PollingRateSupport::Always);
+        assert!(support.is_available(0x0309), "v309 must keep the control");
+        assert_eq!(rates.first(), Some(&8000));
+    }
+
+    /// Never over Bluetooth, whatever the model says. The rate list itself is the
+    /// model's and does not depend on the transport — it is the verdict that goes.
+    #[test]
+    fn bluetooth_still_has_no_control() {
+        let (support, rates) =
+            resolve_polling_rate(Some(2304), 0x3151, 0x502d, TransportType::Bluetooth);
+        assert_eq!(support, PollingRateSupport::Unsupported);
+        assert!(!support.is_available(0x0309));
+        assert_eq!(rates.first(), Some(&8000));
     }
 }

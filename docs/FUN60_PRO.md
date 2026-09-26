@@ -73,6 +73,15 @@ source as measured rather than transcribed, since it comes from this section and
 not from the vendor app. The caveat in the next section still stands — offering
 the setting is not a claim that it changes the report rate.
 
+Reaching that exception needs the firmware device id, and the USB IDs cannot
+substitute: **0x3151:0x502d is claimed by 56 products** in `data/devices.json`
+(this board, FUN60 Ultra, FUN75, and a tail of rebranded AttackShark, AJAZZMOUSE,
+EWEADNV and Epomaker boards). A lookup by USB pair alone returns whichever
+product is listed first — an AttackShark, for this board — and the capability
+verdict then describes that other product. The TUI hit exactly this: it decided
+the capability at connect time, before the id was in hand, and never revisited
+the decision after the id arrived.
+
 **3.2 The travel stream does not track it.** Reading the vendor input
 collection while keys move, at three settings, 5 s each:
 

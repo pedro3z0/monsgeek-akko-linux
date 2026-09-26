@@ -82,6 +82,24 @@ pub(in crate::tui) enum InfoTag {
 }
 
 impl App {
+    /// Read the stored polling rate. Split out of [`Self::load_device_info`] because the
+    /// control can become available *after* that pass: the connect-time lookup has to run
+    /// before the key matrix is sized, so it may not know the firmware device id yet.
+    pub(in crate::tui) fn load_polling_rate(&mut self) {
+        let Some(kb) = self.keyboard.clone() else {
+            return;
+        };
+        self.loading.polling_rate = LoadState::Loading;
+        let tx = self.gen_sender();
+        tokio::spawn(async move {
+            let result = kb
+                .get_polling_rate()
+                .map(|r| r.to_hz())
+                .map_err(|e| e.to_string());
+            tx.send(AsyncResult::PollingRate(result));
+        });
+    }
+
     /// Load all device info (all queries for tabs 0/1)
     /// Spawns background tasks to avoid blocking the UI
     pub(in crate::tui) fn load_device_info(&mut self) {
@@ -143,15 +161,7 @@ impl App {
         if self.polling_rate_support == PollingRateSupport::Unsupported {
             self.loading.polling_rate = LoadState::NotLoaded;
         } else {
-            let kb = keyboard.clone();
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                let result = kb
-                    .get_polling_rate()
-                    .map(|r| r.to_hz())
-                    .map_err(|e| e.to_string());
-                tx.send(AsyncResult::PollingRate(result));
-            });
+            self.load_polling_rate();
         }
 
         // LED params
