@@ -226,8 +226,38 @@ Read: `[0xE5, sub, 0x01, page]` → 64 raw bytes per page.
      again.
   If (2) fires while hovering, the firmware re-triggers anywhere and
   config-only standard RT is impossible — the fallback is a host-side layer or a
-  firmware patch. This trial was left in place on the board; the feel test is
-  what decides it.
+  firmware patch.
+
+  **Feel test done: (2) fails, so config-only standard RT does not work on this
+  firmware.** A user's own test with `--standard 0.9 0.4` on key A — verified on
+  the board as actuation 0.90 / release 0.50 / rt_press 0.40 / rt_lift 0.40,
+  mode `Normal+RT` — still re-triggered while pressing past 2 mm. The values
+  round-trip and are stored; the firmware simply does not use the release point
+  as a re-arm gate. It re-arms on any upward crossing, i.e. continuous RT.
+
+  Consequence: `set-rt standard` and `set-key-trigger --standard` write a
+  correct-looking mapping that this firmware will not honour. Keep using them
+  for the *stored* configuration (they are exact and round-trip), but do not
+  expect Wooting-style behaviour from v309.
+
+  What is left, in order of effort:
+
+  1. **DKS (base mode 2).** Discrete per-slot thresholds rather than a
+     continuous scan, so a single binding fires once per press with no re-arm
+     loop. This is the closest thing v309 offers to standard RT, and it is
+     configured today: `dks A --travel-mm 0.9 --slots "A;;;"` after
+     `set-key-trigger A --mode dks --rt false`.
+  2. **Tuning the continuous RT.** Whether `rt_lift` is honoured at all is
+     untested; if it is, a larger value widens the lift needed to re-arm and
+     suppresses accidental re-triggers. Worth one experiment before ruling it
+     out.
+  3. **Host-side layer.** Read the depth stream, run the state machine in
+     userspace, and emit keystrokes through uinput while detaching the kernel's
+     HID driver so the board's own reports do not also reach the input stack.
+     `monsgeek-joystick` already does depth -> uinput, so the pieces exist. The
+     cost is a full input takeover: if the process dies, the keyboard is dead
+     until the driver is rebound.
+  4. **Firmware patch.** The only true fix; out of this repository's scope.
 - Modes live in the **active profile**. Keymaps are per (profile, layer) with
   4 layers, and the Fn table is a separate store (sys 0/1).
 
