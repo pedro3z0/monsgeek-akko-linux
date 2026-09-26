@@ -68,8 +68,13 @@ bpf-ebpf:
 		cargo +nightly build --release -Z build-std=core --target bpfel-unknown-none
 
 ## Run tests
-test:
+test: check-launcher
 	cd $(DRIVER_DIR) && $(CARGO) test --workspace --features firmware-api
+
+## Check the launcher: bash syntax, and that --help documents every command
+check-launcher:
+	bash -n akko.sh
+	./scripts/check-launcher-help.sh
 
 ## Run clippy lints
 check:

@@ -6,7 +6,13 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "iot_driver")]
-#[command(author, version, about = "MonsGeek M1 V5 HE Linux Driver")]
+// The model is resolved from the connected board at runtime (the banner in
+// `info`/`all` names it), so the help text must not claim a particular one.
+#[command(
+    author,
+    version,
+    about = "Linux driver for MonsGeek/Akko magnetic keyboards"
+)]
 #[command(propagate_version = true)]
 pub struct Cli {
     /// Enable transport monitoring (prints all commands/responses)

@@ -113,35 +113,69 @@ cmd_help() {
     cat <<EOF
 akko — MonsGeek/Akko keyboard driver, simplified
 
-Usage: $0 <command> [args...]
+Usage: akko <command> [args...]
+       (run with no command to print this help)
 
 Setup & health
-  setup          Build the driver and install it + udev rules + device db
-                 (delegates to: make driver && sudo make install; needs a
-                 source checkout next to this script, or \$AKKO_REPO set)
-  status         One-shot health check: binary, USB device, udev rules,
-                 end-to-end query, webapp server, data files
+  setup          Build the driver, then install it with the udev rules and the
+                 device database. Needs a source checkout: the directory holding
+                 this script, or \$AKKO_REPO. Builds with 'make driver' and
+                 installs with 'sudo make install'.
+  status         One-shot health check: which binary is used and whether it is
+                 current, USB device, udev rules, device database, an end-to-end
+                 query (skipped when the webapp server holds the keyboard), and
+                 whether the webapp server is listening.
 
 Official webapp (app.monsgeek.com)
-  web            Start the local gRPC server (127.0.0.1:$GRPC_PORT) in the
-                 background and open the webapp in your browser
-  serve          Run the gRPC server in the foreground (logs to stdout)
-  stop           Stop a server started in the background
+  web            Start the gRPC helper on 127.0.0.1:$GRPC_PORT in the background
+                 and open the webapp in your browser. Log: $SERVE_LOG
+  serve          Run the same gRPC helper in the foreground (Ctrl-C to end).
+  stop           Stop a background server. Also stops one started outside this
+                 script, by looking up whichever process owns port $GRPC_PORT.
 
 Interactive
-  tui            Launch the terminal UI (Device Info, LED, key depth,
-                 triggers, macros). Needs a real TTY.
+  tui            Launch the terminal UI: Device Info, Key Depth, Key Mapping and
+                 Notify tabs. Needs a real TTY. Press '?' inside for every
+                 keybinding, including the per-key trigger editor's.
 
 CLI
-  anything else  Passed straight to iot_driver, e.g.:
-                   $0 info
-                   $0 all
-                   $0 triggers
-                   $0 set-led wave 4 3
-                   $0 --monitor info     (global flags work too)
+  driver-help    The driver's own command list (same as 'iot_driver --help').
+  <anything else>
+                 Passed straight to iot_driver, so every command and flag of the
+                 driver is available:
+                   akko info | all | triggers | rate | battery
+                   akko set-led wave 4 3
+                   akko set-rt standard 1.5 0.4
+                   akko triggers --key A --rt-press 0.4
+                 Global flags work before or after the command:
+                   --monitor          print every command/response
+                   --record <FILE>    record decoded traffic as JSONL
+                   --file <FILE>      replay a pcap instead of the device
+                   --all              include standard HID reports
+                   --hex              show raw hex beside decoded output
+                   --filter <WHAT>    all | events | commands | cmd=0xNN
+                   -D, --device <SEL> index, transport (usb/dongle/bt) or HID path
+                   -P, --profile <N>  act on profile 0-3
 
-Run '$0 status' first if something does not work.
+Environment
+  AKKO_REPO      Path to the source checkout. Defaults to the directory holding
+                 this script when that looks like a checkout.
+
+Notes
+  * One interface at a time: the webapp server holds the HID device, so 'tui'
+    and the CLI warn while it runs. 'akko stop' hands the keyboard back.
+  * Which binary runs: the one found on PATH first, then the checkout's release
+    build, then its debug build. 'akko status' says when that binary is older
+    than the sources; rebuild with 'make driver && sudo make install-driver'.
+
+Run 'akko status' first if something does not work.
 EOF
+}
+
+cmd_driver_help() {
+    local driver
+    driver="$(require_driver)"
+    exec "$driver" --help
 }
 
 cmd_setup() {
@@ -361,6 +395,7 @@ main() {
         serve)          cmd_serve "$@" ;;
         stop)           cmd_stop "$@" ;;
         tui)            cmd_tui "$@" ;;
+        driver-help)    cmd_driver_help "$@" ;;
         help|-h|--help) cmd_help ;;
         *)              passthrough "$cmd" "$@" ;;
     esac
