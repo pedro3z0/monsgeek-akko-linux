@@ -236,6 +236,12 @@ systemctl status akko-bpf-battery.service
 
 For the complete command reference, see [docs/CLI.md](docs/CLI.md).
 
+**Launcher:** `sudo make install` also installs an `akko` command (run
+`./akko.sh` from a checkout) that wraps the common workflows — `akko setup`,
+`akko status`, `akko web` (official webapp), `akko tui`, `akko stop`. Anything
+else passes straight through to `iot_driver`, so `akko triggers` ==
+`iot_driver triggers`.
+
 **Global debugging flags** (work with any command):
 - `--monitor` - Trace all HID commands/responses
 - `--file <pcap>` - Replay pcap capture file

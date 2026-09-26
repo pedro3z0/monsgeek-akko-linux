@@ -29,7 +29,8 @@ JOYSTICK_BIN := monsgeek-joystick
 LOADER_BIN := akko-loader
 
 .PHONY: all driver driver-debug bpf clean clean-driver clean-bpf \
-        install install-driver install-udev install-desktop install-bpf install-systemd install-all \
+        install install-driver install-udev install-desktop install-launcher \
+        install-bpf install-systemd install-all \
         uninstall uninstall-driver uninstall-bpf \
         test check fmt help \
         install-tray uninstall-tray run-tray \
@@ -160,17 +161,24 @@ install-desktop:
 	fi
 	@echo "Installed desktop entry to $(APP_DIR)"
 
+## Install the `akko` launcher (status/web/tui wrapper around the driver).
+## The launcher is location-aware: installed into BIN_DIR it drives the
+## installed iot_driver; next to this Makefile it can also rebuild via `setup`.
+install-launcher:
+	$(INSTALL) -D -m 755 akko.sh $(DESTDIR)$(BIN_DIR)/akko
+	@echo "Installed akko launcher to $(BIN_DIR)/akko"
+
 ## Install driver + udev rules (standard install)
-install: install-driver install-udev install-desktop install-data
+install: install-driver install-udev install-launcher install-desktop install-data
 	@echo ""
 	@echo "Installation complete!"
-	@echo "Run '$(DRIVER_BIN) --help' to get started."
+	@echo "Run 'akko status' to get started (or '$(DRIVER_BIN) --help')."
 	@echo ""
 	@echo "For HID-BPF battery support (2.4GHz dongle), run:"
 	@echo "  make bpf && sudo make install-bpf install-systemd"
 
 ## Install everything (driver + BPF + systemd)
-install-all: install-driver install-udev install-desktop install-data install-bpf install-systemd
+install-all: install-driver install-udev install-launcher install-desktop install-data install-bpf install-systemd
 	@echo ""
 	@echo "Full installation complete!"
 
@@ -178,6 +186,7 @@ install-all: install-driver install-udev install-desktop install-data install-bp
 uninstall-driver:
 	rm -f $(DESTDIR)$(BIN_DIR)/$(DRIVER_BIN)
 	rm -f $(DESTDIR)$(BIN_DIR)/$(JOYSTICK_BIN)
+	rm -f $(DESTDIR)$(BIN_DIR)/akko
 	rm -f $(DESTDIR)$(UDEV_RULES_DIR)/99-monsgeek.rules
 	rm -f $(DESTDIR)$(APP_DIR)/solutions.echtzeit.akko_keyboard_driver.desktop
 	@if [ -z "$(DESTDIR)" ]; then \
@@ -362,6 +371,7 @@ help:
 	@echo "  install-driver  Install driver binary only"
 	@echo "  install-udev    Install udev rules only"
 	@echo "  install-desktop Install XDG desktop entry (needed for screen-share app name)"
+	@echo "  install-launcher Install the 'akko' launcher command (status/web/tui)"
 	@echo "  install-bpf     Install BPF loader + eBPF object"
 	@echo "  install-systemd Install systemd service for BPF auto-load"
 	@echo "  uninstall       Remove all installed files"
