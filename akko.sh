@@ -271,8 +271,11 @@ cmd_web() {
     ok "server ready on 127.0.0.1:$GRPC_PORT"
     echo "==> Opening $WEBAPP_URL"
     # Backgrounded on purpose: xdg-open can block until the browser exits,
-    # which would wedge this command long after the page is up.
-    (xdg-open "$WEBAPP_URL" >/dev/null 2>&1 &) || true
+    # which would wedge this command long after the page is up. Run from a temp
+    # directory: when no browser is registered for https, some xdg-open
+    # fallbacks treat the URL as a path and create a directory named after the
+    # host in the current working directory.
+    (cd "${TMPDIR:-/tmp}" && xdg-open "$WEBAPP_URL" >/dev/null 2>&1 &) || true
     echo "    (if no browser window appears, open $WEBAPP_URL yourself)"
     echo "    Stop the server later with: $0 stop"
 }
