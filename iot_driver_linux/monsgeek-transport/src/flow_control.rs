@@ -376,6 +376,15 @@ impl FlowControlTransport {
         raw_mode: bool,
     ) -> Result<Vec<u8>, TransportError> {
         for attempt in 0..timing::QUERY_RETRIES {
+            // A retry only helps if the firmware has had time to answer: on
+            // stock fw v309 the response to a back-to-back query can lag the
+            // read by ~100 ms, and a retry that fires immediately re-reads the
+            // same stale frame until every attempt is spent. Attempt 0 stays
+            // fast (just the read-gap); only a failed attempt pays this pause.
+            if attempt > 0 {
+                std::thread::sleep(Duration::from_millis(timing::QUERY_RETRY_DELAY_MS));
+            }
+
             if self.inner.send_report(cmd_byte, data, checksum).is_err() {
                 debug!("Send attempt {} failed for 0x{:02X}", attempt, cmd_byte);
                 continue;
@@ -855,6 +864,22 @@ mod tests {
         fn get_battery_status(&self) -> Result<(u8, bool, bool), TransportError> {
             Ok((100, true, false))
         }
+    }
+
+    /// A stale frame — the previous command's answer, wrong echo — must be
+    /// retried away, not handed to the caller: stock fw v309 serves these when
+    /// commands run back-to-back, and the retry only succeeds because it waits
+    /// `QUERY_RETRY_DELAY_MS` instead of re-reading the same stale buffer.
+    #[test]
+    fn query_retries_past_a_stale_frame() {
+        let stale = vec![0x8F, 0x01, 0x02, 0x03, 0x04, 0, 0, 9, 3];
+        let fresh = vec![0xE6, 0xAA, 0x02, 0, 0, 0, 0, 0];
+        let t = FlowControlTransport::new(ScriptedTransport::new(vec![stale, fresh.clone()]));
+
+        let got = t
+            .query_command(0xE6, &[], ChecksumType::Bit7)
+            .expect("retry should recover after the stale frame");
+        assert_eq!(got, fresh);
     }
 
     /// A keypress report arriving mid-read must not become "the page": it is shorter

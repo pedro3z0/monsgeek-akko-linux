@@ -1033,9 +1033,20 @@ pub mod timing {
     pub const DEFAULT_DELAY_MS: u64 = 100;
     /// Wired query read-gap (ms): wait after sending a query before reading, so
     /// the device has computed the response and loaded the report buffer (read
-    /// too soon → stale/previous response). Retried up to [`QUERY_RETRIES`], so
-    /// it can be small.
+    /// too soon → stale/previous response). Retried up to [`QUERY_RETRIES`]
+    /// with [`QUERY_RETRY_DELAY_MS`] between attempts, so it can be small.
     pub const WIRED_READ_GAP_MS: u64 = 10;
+    /// Pause before re-sending a query whose attempt just failed (ms).
+    ///
+    /// Stock firmware (v309) can lag a back-to-back query's answer by on the
+    /// order of 100 ms: the read then returns the *previous* response, and
+    /// retries that fire immediately re-read the same stale frame — all
+    /// [`QUERY_RETRIES`] spent inside ~50 ms — ending in
+    /// `TransportError::Timeout` ("Communication timeout"). Measured remedy on
+    /// that firmware: a ~100 ms pause between attempts makes every query pass,
+    /// while the first attempt keeps the short [`WIRED_READ_GAP_MS`] so the
+    /// happy path is unchanged.
+    pub const QUERY_RETRY_DELAY_MS: u64 = 100;
     /// Wired write spacing (ms): delay after a fire-and-forget write. Near-zero;
     /// only relevant for back-to-back flash-write bursts, which add their own
     /// per-iteration spacing. Realtime streaming bypasses this entirely (delay 0).
