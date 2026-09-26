@@ -169,6 +169,21 @@ cmd_status() {
         local ver
         ver="$("$driver" --version 2>/dev/null || true)"
         [[ -n "$ver" ]] && ok "$ver"
+
+        # An installed binary older than the checkout's sources is the reason a
+        # rebuilt fix appears not to work, so say so instead of leaving it to be
+        # discovered from unchanged behaviour.
+        local built="$DRIVER_DIR/target/release/iot_driver"
+        if [[ -n "$REPO" && -f "$built" && "$built" -nt "$driver" ]]; then
+            bad "installed binary is older than the local build"
+            hint "run: sudo make -C '$REPO' install-driver"
+        fi
+        if [[ -n "$REPO" ]] && [[ -n "$(find "$REPO/iot_driver_linux" \
+              \( -name target -o -name .git \) -prune -o -type f \
+              \( -name '*.rs' -o -name 'Cargo.toml' \) -newer "$driver" -print -quit 2>/dev/null)" ]]; then
+            bad "sources are newer than this binary — it predates the current checkout"
+            hint "run: make -C '$REPO' driver && sudo make -C '$REPO' install-driver"
+        fi
     else
         bad "driver binary not built or not installed"
         if [[ -n "$REPO" ]]; then

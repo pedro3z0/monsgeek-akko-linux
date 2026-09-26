@@ -96,10 +96,20 @@ clean-bpf:
 # Install Targets (require sudo, run 'make driver' first as regular user)
 # ============================================================================
 
-## Install driver + joystick binaries (must run 'make driver' first)
+## Install driver + joystick binaries (run 'make driver' first, as your normal user)
 install-driver:
 	@test -f $(DRIVER_DIR)/target/release/$(DRIVER_BIN) || \
 		{ echo "Error: Binary not found. Run 'make driver' first (as regular user)."; exit 1; }
+	@# Refuse to install a build older than the sources. Copying a stale binary is
+	@# worse than failing: the install looks successful and the old behaviour persists.
+	@if [ -n "$$(find $(DRIVER_DIR) \( -name target -o -name .git \) -prune -o \
+		-type f \( -name '*.rs' -o -name 'Cargo.toml' \) \
+		-newer $(DRIVER_DIR)/target/release/$(DRIVER_BIN) -print -quit 2>/dev/null)" ]; then \
+		echo "Error: $(DRIVER_BIN) is older than the sources — not installing a stale build."; \
+		echo "  Run:  make driver      # build as your normal user, not under sudo"; \
+		echo "  then: sudo make install-driver"; \
+		exit 1; \
+	fi
 	$(INSTALL) -D -m 755 $(DRIVER_DIR)/target/release/$(DRIVER_BIN) $(DESTDIR)$(BIN_DIR)/$(DRIVER_BIN)
 	@echo "Installed $(DRIVER_BIN) to $(BIN_DIR)"
 	@# monsgeek-joystick is a workspace member built by the same `make driver`.
