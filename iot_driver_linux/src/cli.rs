@@ -234,10 +234,18 @@ pub enum Commands {
     },
 
     /// Enable/disable Rapid Trigger or set sensitivity
+    ///
+    /// "standard" writes a Wooting-style mapping: the release point is set to
+    /// actuation minus sensitivity, so the key fully un-arms before it can
+    /// re-fire.
     #[command(visible_aliases = ["rapid-trigger", "rt"])]
     SetRt {
-        /// "on", "off", or sensitivity in mm (e.g., 0.1, 0.2)
+        /// "on", "off", "standard", or sensitivity in mm (e.g., 0.1, 0.2)
         value: String,
+        /// Actuation point in mm, for "standard"
+        actuation: Option<f32>,
+        /// RT sensitivity in mm, for "standard" (release = actuation - this)
+        sensitivity: Option<f32>,
     },
 
     /// Set release point for all keys
@@ -272,6 +280,12 @@ pub enum Commands {
         /// Release point in mm (optional)
         #[arg(long)]
         release: Option<f32>,
+        /// Rapid-Trigger press sensitivity in mm (optional, per key)
+        #[arg(long)]
+        rt_press: Option<f32>,
+        /// Rapid-Trigger lift sensitivity in mm (optional, per key)
+        #[arg(long)]
+        rt_lift: Option<f32>,
         /// Base key mode (optional; RT flag is set separately via --rt)
         #[arg(long, value_enum)]
         mode: Option<KeyModeArg>,

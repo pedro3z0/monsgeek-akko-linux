@@ -167,8 +167,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 commands::triggers::set_actuation(kb, mm)
             })?;
         }
-        Some(Commands::SetRt { value }) => {
-            commands::with_keyboard_on_profile(&ctx, |kb| commands::triggers::set_rt(kb, &value))?;
+        Some(Commands::SetRt {
+            value,
+            actuation,
+            sensitivity,
+        }) => {
+            commands::with_keyboard_on_profile(&ctx, |kb| {
+                commands::triggers::set_rt(kb, &value, actuation, sensitivity)
+            })?;
         }
         Some(Commands::SetRelease { mm }) => {
             commands::with_keyboard_on_profile(&ctx, |kb| commands::triggers::set_release(kb, mm))?;
@@ -187,12 +193,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             key,
             actuation,
             release,
+            rt_press,
+            rt_lift,
             mode,
             rt,
         }) => {
             let mode = mode.map(Into::into);
             commands::with_keyboard_on_profile(&ctx, |kb| {
-                commands::triggers::set_key_trigger(kb, key, actuation, release, mode, rt)
+                commands::triggers::set_key_trigger(
+                    kb, key, actuation, release, rt_press, rt_lift, mode, rt,
+                )
             })?;
         }
         Some(Commands::SetModeAll { mode, rt }) => {

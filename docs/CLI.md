@@ -276,14 +276,25 @@ iot_driver set-actuation 2.0    # 2.0mm actuation point
 
 ### set-rt
 
-Enable/disable Rapid Trigger or set sensitivity.
+Enable/disable Rapid Trigger, set its sensitivity, or write a standard
+(non-continuous) RT mapping.
 
 ```bash
-iot_driver set-rt on           # Enable with default sensitivity
-iot_driver set-rt on 0.3       # Enable with 0.3mm sensitivity
-iot_driver set-rt 0.2          # Enable with 0.2mm sensitivity
-iot_driver set-rt off          # Disable Rapid Trigger
+iot_driver set-rt on                        # Enable, 0.3mm sensitivity
+iot_driver set-rt 0.2                       # Enable with 0.2mm sensitivity
+iot_driver set-rt off                       # Disable Rapid Trigger
+iot_driver set-rt standard 1.5 0.4          # Standard RT: see below
 ```
+
+**`standard <actuation-mm> <sensitivity-mm>`** writes a Wooting-style mapping
+for every key: the release point is set to *actuation − sensitivity* (1.50/0.40
+→ release 1.10), so the key fully un-arms and needs a real return before it can
+re-fire. The vendor presets instead leave a much lower release point (1.50/0.50
+at 0.40 sensitivity), which is the continuous variant where the key keeps
+firing inside the band. RT itself is only the `0x80` flag; the behaviour comes
+from this relationship. The values are derived from the *rounded* raw units, so
+the printed release point is exactly what is stored, and inputs that would
+leave no usable release point are refused rather than written.
 
 **Aliases:** `rapid-trigger`, `rt`
 
@@ -319,14 +330,22 @@ iot_driver set-top-deadzone 0.1
 
 ### set-key-trigger
 
-Set trigger settings for a specific key.
+Set trigger settings for a specific key. Only the flags you pass change — the
+rest are read back from the keyboard first, so this can adjust one key without
+disturbing the rest of the board.
 
 ```bash
 iot_driver set-key-trigger 42 --actuation 1.5
 iot_driver set-key-trigger 42 --release 2.0
 iot_driver set-key-trigger 42 --mode rt
 iot_driver set-key-trigger 42 --actuation 1.0 --mode dks
+iot_driver set-key-trigger 9 --rt-press 0.4 --rt-lift 0.4   # per-key RT sensitivity
 ```
+
+`--rt-press` / `--rt-lift` set this key's Rapid-Trigger sensitivity only
+(`set-rt` remains the board-wide fan-out). To give one key a standard-RT
+mapping, set all three: `--actuation 1.5 --release 1.1 --rt-press 0.4
+--rt-lift 0.4 --rt true`.
 
 Modes: `normal`, `rt`, `dks`, `snaptap`
 

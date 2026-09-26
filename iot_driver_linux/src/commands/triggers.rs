@@ -4,7 +4,7 @@ use super::CommandResult;
 use iot_driver::key_action::KeyAction;
 use monsgeek_keyboard::{
     DksAction, DksBinding, DksConfig, DksPhase, KeyMode, KeyTriggerSettings, KeyboardInterface,
-    ModeByte, TravelDepth,
+    ModeByte, TravelDepth, settings::Precision,
 };
 use monsgeek_transport::protocol::KeymatrixLayer;
 use std::collections::{BTreeSet, HashSet};
@@ -504,9 +504,135 @@ pub fn set_actuation(keyboard: &KeyboardInterface, mm: f32) -> CommandResult {
     Ok(())
 }
 
-/// Enable/disable Rapid Trigger or set sensitivity
-pub fn set_rt(keyboard: &KeyboardInterface, value: &str) -> CommandResult {
+/// Raw (firmware-unit) values that make a board behave as standard, i.e.
+/// non-continuous, Rapid Trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StandardRtPlan {
+    actuation: u16,
+    release: u16,
+    sensitivity: u16,
+}
+
+/// Compute the travel values a standard-RT mapping needs.
+///
+/// RT itself is only the orthogonal `0x80` flag on the mode byte; what makes it
+/// *standard* is the relationship between the travel fields. The release point
+/// has to sit exactly one sensitivity below the actuation point, so the key
+/// fully un-arms and cannot re-fire while still held above it. The vendor
+/// presets leave a much lower release point instead (1.50/0.50 with a 0.40
+/// sensitivity on the FUN60 Pro), which is the continuous variant: the key
+/// keeps firing inside that band.
+///
+/// Values come back in firmware units at the device's precision, and the
+/// release point is derived from the *rounded* values, so what gets printed and
+/// what lands on the board are the same number. Inputs that would produce a
+/// degenerate table -- a release point of zero, or a sensitivity that rounds
+/// away at this precision -- are rejected instead of being written.
+fn standard_rt_plan(
+    actuation_mm: f32,
+    sensitivity_mm: f32,
+    precision: Precision,
+) -> Result<StandardRtPlan, String> {
+    if !actuation_mm.is_finite() || actuation_mm <= 0.0 {
+        return Err(format!("actuation must be above 0mm (got {actuation_mm})"));
+    }
+    if !sensitivity_mm.is_finite() || sensitivity_mm <= 0.0 {
+        return Err(format!(
+            "RT sensitivity must be above 0mm (got {sensitivity_mm})"
+        ));
+    }
+    if sensitivity_mm >= actuation_mm {
+        return Err(format!(
+            "sensitivity {sensitivity_mm:.2}mm must be below the actuation point \
+             {actuation_mm:.2}mm, or the release point would be zero or below"
+        ));
+    }
+
+    let actuation = TravelDepth::from_mm(actuation_mm, precision).raw();
+    let sensitivity = TravelDepth::from_mm(sensitivity_mm, precision).raw();
+    let release = actuation.saturating_sub(sensitivity);
+    if release == 0 || release >= actuation {
+        return Err(format!(
+            "{sensitivity_mm:.3}mm rounds to {sensitivity} units at {} precision, \
+             which leaves no usable release point below {actuation}",
+            precision.as_str()
+        ));
+    }
+    Ok(StandardRtPlan {
+        actuation,
+        release,
+        sensitivity,
+    })
+}
+
+/// Enable/disable Rapid Trigger, set its sensitivity, or write a standard-RT
+/// mapping for every key.
+pub fn set_rt(
+    keyboard: &KeyboardInterface,
+    value: &str,
+    actuation: Option<f32>,
+    sensitivity: Option<f32>,
+) -> CommandResult {
     let precision = keyboard.get_precision().unwrap_or_default();
+
+    if value.eq_ignore_ascii_case("standard") {
+        let (Some(actuation_mm), Some(sensitivity_mm)) = (actuation, sensitivity) else {
+            return Err("standard RT needs both values: set-rt standard \
+                        <actuation-mm> <sensitivity-mm> (e.g. set-rt standard 1.5 0.4)"
+                .into());
+        };
+        let plan = standard_rt_plan(actuation_mm, sensitivity_mm, precision)?;
+        let act = TravelDepth::from_raw(plan.actuation);
+        let rel = TravelDepth::from_raw(plan.release);
+        let sens = TravelDepth::from_raw(plan.sensitivity);
+
+        // Travel first, flag last: arming RT before the table matches the new
+        // mapping leaves a window where the key still re-fires on the old
+        // values. set_rapid_trigger_all reads the mode bytes back first, so each
+        // key's base mode survives.
+        keyboard.set_actuation_all(act)?;
+        keyboard.set_release_all(rel)?;
+        keyboard.set_rt_press_all(sens)?;
+        keyboard.set_rt_lift_all(sens)?;
+        keyboard.set_rapid_trigger_all(true)?;
+
+        println!(
+            "Standard RT applied to all keys (firmware precision: {})",
+            precision.as_str()
+        );
+        println!("  Actuation:   {}", act.format(precision));
+        println!("  Sensitivity: {}", sens.format(precision));
+        println!(
+            "  Release:     {}  (actuation - sensitivity)",
+            rel.format(precision)
+        );
+        println!("  Rapid Trigger: on  (0x80 flag set, base modes preserved)");
+        println!();
+        println!(
+            "The key now needs a full return below {:.2}mm before it can re-fire.",
+            rel.to_mm(precision)
+        );
+        println!(
+            "If it still fires while pressing down from a hover, the firmware is \
+             running continuous RT regardless of these values -- see \
+             docs/FUN60_PRO.md section 6."
+        );
+        return Ok(());
+    }
+
+    if actuation.is_some() || sensitivity.is_some() {
+        // `set-rt on 0.3` used to appear in the docs but never parsed (the value
+        // was a single argument); point at the form that does.
+        let hint = match value.to_lowercase().as_str() {
+            "on" | "enable" | "off" | "0" | "disable" => {
+                " — did you mean `set-rt <sensitivity-mm>`? 'on' already means 0.3mm"
+            }
+            _ => " — only 'standard' takes these two numbers",
+        };
+        return Err(
+            format!("actuation/sensitivity are only valid with 'set-rt standard'{hint}").into(),
+        );
+    }
 
     match value.to_lowercase().as_str() {
         "off" | "0" | "disable" => match keyboard.set_rapid_trigger_all(false) {
@@ -578,11 +704,17 @@ pub fn set_top_deadzone(keyboard: &KeyboardInterface, mm: f32) -> CommandResult 
 }
 
 /// Set trigger settings for a specific key
+///
+/// One optional argument per field the command can change, so the list grows
+/// with the table rather than needing a struct.
+#[allow(clippy::too_many_arguments)]
 pub fn set_key_trigger(
     keyboard: &KeyboardInterface,
     key: u8,
     actuation: Option<f32>,
     release: Option<f32>,
+    rt_press: Option<f32>,
+    rt_lift: Option<f32>,
     mode: Option<KeyMode>,
     rt: Option<bool>,
 ) -> CommandResult {
@@ -599,7 +731,9 @@ pub fn set_key_trigger(
     // Per-key config uses the same u16 precision as the bulk table (0.01mm here).
 
     // Base mode and RT flag are independent; each preserves the current value
-    // when not overridden.
+    // when not overridden. RT sensitivity is per key too (sub-commands 0x02 /
+    // 0x03), so `--rt-press` / `--rt-lift` change this key only -- `set-rt`
+    // stays the board-wide fan-out.
     let settings = KeyTriggerSettings {
         key_index: key,
         actuation: actuation
@@ -608,6 +742,12 @@ pub fn set_key_trigger(
         deactuation: release
             .map(|mm| TravelDepth::from_mm(mm, precision).raw())
             .unwrap_or(current.deactuation),
+        rt_press: rt_press
+            .map(|mm| TravelDepth::from_mm(mm, precision).raw())
+            .unwrap_or(current.rt_press),
+        rt_lift: rt_lift
+            .map(|mm| TravelDepth::from_mm(mm, precision).raw())
+            .unwrap_or(current.rt_lift),
         mode: mode.unwrap_or(current.mode),
         rapid_trigger: rt.unwrap_or(current.rapid_trigger),
     };
@@ -621,6 +761,11 @@ pub fn set_key_trigger(
                 TravelDepth::from_raw(settings.deactuation).format(precision),
                 ModeByte::new(settings.mode, settings.rapid_trigger),
                 precision.as_str(),
+            );
+            println!(
+                "  RT press: {}, RT lift: {}",
+                TravelDepth::from_raw(settings.rt_press).format(precision),
+                TravelDepth::from_raw(settings.rt_lift).format(precision),
             );
         }
         Err(e) => eprintln!("Failed to set key trigger: {e}"),
@@ -971,4 +1116,66 @@ fn diff_triggers(
         println!("  {changed} key(s) changed");
     }
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The mapping docs/FUN60_PRO.md section 6 recorded as trial 2 on the FUN60
+    /// Pro (v309): 0.01 mm steps, actuation 1.50, sensitivity 0.40, and the
+    /// release point derived to 1.10.
+    #[test]
+    fn standard_plan_reproduces_the_trial_two_mapping() {
+        let plan = standard_rt_plan(1.5, 0.4, Precision::Medium).expect("valid plan");
+        assert_eq!(plan.actuation, 150);
+        assert_eq!(plan.sensitivity, 40);
+        assert_eq!(plan.release, 110);
+    }
+
+    /// The release point comes from the rounded raw values, not from millimetre
+    /// arithmetic: 1.504/0.006 differs by a unit either way (150-1 = 149, while
+    /// 1.498mm would round to 150), and the stored value has to be the one that
+    /// was printed.
+    #[test]
+    fn release_is_derived_from_the_rounded_values() {
+        let plan = standard_rt_plan(1.504, 0.006, Precision::Medium).expect("valid plan");
+        assert_eq!(plan.actuation, 150);
+        assert_eq!(plan.sensitivity, 1);
+        assert_eq!(plan.release, 149);
+        assert_eq!(plan.release, plan.actuation - plan.sensitivity);
+    }
+
+    /// A sensitivity at or above the actuation point would put the release
+    /// point at zero or below, so it is refused instead of being written.
+    #[test]
+    fn sensitivity_must_be_below_the_actuation_point() {
+        assert!(standard_rt_plan(1.5, 1.5, Precision::Medium).is_err());
+        assert!(standard_rt_plan(1.5, 2.0, Precision::Medium).is_err());
+    }
+
+    #[test]
+    fn zero_and_negative_values_are_refused() {
+        assert!(standard_rt_plan(0.0, 0.4, Precision::Medium).is_err());
+        assert!(standard_rt_plan(-1.0, 0.4, Precision::Medium).is_err());
+        assert!(standard_rt_plan(1.5, 0.0, Precision::Medium).is_err());
+        assert!(standard_rt_plan(1.5, -0.4, Precision::Medium).is_err());
+    }
+
+    /// NaN compares false against everything, so a plain `<= 0.0` guard would
+    /// wave it through and write a garbage release point.
+    #[test]
+    fn nan_is_refused() {
+        assert!(standard_rt_plan(f32::NAN, 0.4, Precision::Medium).is_err());
+        assert!(standard_rt_plan(1.5, f32::NAN, Precision::Medium).is_err());
+    }
+
+    /// On 0.1 mm firmware, 0.04 mm rounds to nothing: writing it would leave the
+    /// release point equal to the actuation point, i.e. no RT band at all.
+    #[test]
+    fn sensitivity_that_rounds_away_is_refused() {
+        assert!(standard_rt_plan(1.5, 0.04, Precision::Coarse).is_err());
+        // 0.1 mm survives there, so the same shape is accepted.
+        assert!(standard_rt_plan(1.5, 0.1, Precision::Coarse).is_ok());
+    }
 }

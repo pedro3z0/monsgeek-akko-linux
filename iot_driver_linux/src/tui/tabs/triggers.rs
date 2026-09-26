@@ -1025,6 +1025,11 @@ impl App {
                     key_index: key_index as u8,
                     actuation: modal.actuation.raw(),
                     deactuation: modal.release.raw(),
+                    // RT sensitivity is per key as well (sub-commands 0x02 /
+                    // 0x03); the editor has always adjusted it, so the write
+                    // carries it now instead of leaving the stored value be.
+                    rt_press: modal.rt_press.raw(),
+                    rt_lift: modal.rt_lift.raw(),
                     mode: mode_byte.base,
                     rapid_trigger: mode_byte.rapid_trigger,
                 };

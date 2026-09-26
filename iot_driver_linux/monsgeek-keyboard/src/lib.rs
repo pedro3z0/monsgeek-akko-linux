@@ -782,6 +782,8 @@ impl KeyboardInterface {
             key_index,
             actuation: all.press_travel.get(idx).copied().unwrap_or(0),
             deactuation: all.lift_travel.get(idx).copied().unwrap_or(0),
+            rt_press: all.rt_press.get(idx).copied().unwrap_or(0),
+            rt_lift: all.rt_lift.get(idx).copied().unwrap_or(0),
             mode: mode_byte.base,
             rapid_trigger: mode_byte.rapid_trigger,
         })
@@ -789,10 +791,15 @@ impl KeyboardInterface {
 
     /// Set trigger settings for a specific key.
     ///
-    /// Writes actuation (subcmd 0x00), release (0x01) and mode (0x07) via the
-    /// per-key "simple" multi-magnetism form, exactly as the vendor web app does.
-    /// The old `SET_KEY_MAGNETISM_MODE` (0x1D) command is a no-op on the RY5088
-    /// (it belongs to a different chip family), so writes through it never landed.
+    /// Writes actuation (subcmd 0x00), release (0x01), RT sensitivity (0x02,
+    /// 0x03) and mode (0x07) via the per-key "simple" multi-magnetism form,
+    /// exactly as the vendor web app does. The old
+    /// `SET_KEY_MAGNETISM_MODE` (0x1D) command is a no-op on the RY5088 (it
+    /// belongs to a different chip family), so writes through it never landed.
+    ///
+    /// The mode byte goes last because it carries commit=1, and the firmware
+    /// only starts serving correct table reads after the settle delay that
+    /// follows the committed write.
     pub fn set_key_trigger(&self, settings: &KeyTriggerSettings) -> Result<(), KeyboardError> {
         if !self.has_magnetism {
             return Err(KeyboardError::NotSupported(
@@ -812,6 +819,18 @@ impl KeyboardInterface {
             key,
             false,
             &settings.deactuation.to_le_bytes(),
+        )?;
+        self.set_magnetism_simple(
+            mag_cmd::RT_PRESS,
+            key,
+            false,
+            &settings.rt_press.to_le_bytes(),
+        )?;
+        self.set_magnetism_simple(
+            mag_cmd::RT_LIFT,
+            key,
+            false,
+            &settings.rt_lift.to_le_bytes(),
         )?;
         let mode = ModeByte::new(settings.mode, settings.rapid_trigger).to_u8();
         self.set_magnetism_simple(mag_cmd::KEY_MODE, key, true, &[mode])?;

@@ -153,6 +153,14 @@ pub struct KeyTriggerSettings {
     pub actuation: u16,
     /// Deactuation / release point (raw u16 firmware units)
     pub deactuation: u16,
+    /// Rapid-Trigger press sensitivity (raw u16 firmware units)
+    ///
+    /// The firmware stores sensitivity per key (sub-command 0x02), so it can be
+    /// written per key; the board-wide setters are the ones that fan out to
+    /// every position.
+    pub rt_press: u16,
+    /// Rapid-Trigger lift sensitivity (raw u16 firmware units, sub-command 0x03)
+    pub rt_lift: u16,
     /// Base key mode
     pub mode: KeyMode,
     /// Rapid-Trigger flag (orthogonal to `mode`)
