@@ -228,57 +228,75 @@ Read: `[0xE5, sub, 0x01, page]` → 64 raw bytes per page.
   config-only standard RT is impossible — the fallback is a host-side layer or a
   firmware patch.
 
-  **Feel test: the first verdict was wrong, and the corrected one is that
-  config-only standard RT *does* work.** An initial test with `--standard 0.9
-  0.4` on key A — actuation 0.90 / release 0.50 / rt_press 0.40 / rt_lift 0.40,
-  mode `Normal+RT` — re-triggered while pressing past 2 mm, which looked like
-  the firmware ignoring the release point. It is not. The release point is
-  honoured, and `rt_lift` behaves as documented: the key re-arms when it returns
-  to `actuation - rt_lift`.
+  **Measured answer: v309 does implement fixed-point (standard) Rapid Trigger.**
+  Two earlier verdicts here were wrong — first "config-only standard RT is
+  impossible", then "the release point is honoured but 0.9 mm misbehaves" — and
+  both were inferences from press speed rather than measurements. This is the
+  measured result, and the method matters more than the conclusion.
 
-  What the first test got wrong was the *trigger point*. A depth capture
-  (`iot_driver depth`, key A) shows a finger resting at **0.3 mm, not 0**, and
-  hovering anywhere in **0.8-1.5 mm** during a press, with ~0.2 mm of motion
-  noise on top. A trigger at 0.90 mm therefore sits *inside* the band the finger
-  naturally occupies, so any slow press crosses it repeatedly and each crossing
-  is a legitimate trigger. That is correct RT behaviour being misread as a
-  fault.
+  **Method.** The keyboard's own boot-keyboard HID reports (interface 0,
+  `/dev/hidraw4`, world-readable via the udev rules) were captured alongside the
+  depth stream, both timestamped, so "what the finger did" lines up with "what
+  the firmware emitted". Consumer-side behaviour is not evidence: holding a key
+  makes the OS auto-repeat at ~25-30/s (the terminal showed "many" characters
+  for a *single* firmware press), and the vendor webapp shows *none* for the
+  same press because it does not implement auto-repeat. Only the HID stream
+  distinguishes the firmware re-firing from a consumer repeating a held key.
+  Over a 30 s hold the firmware emitted exactly **one** press-down.
 
-  A configuration that works, verified on the board:
+  **The reset point is a real gate.** With `actuation 2.0, release 0.2,
+  rt_lift 1.8` — re-arming possible only by fully releasing — eleven static
+  dwells at 1.3-2.3 mm produced **no** press in ten cases, and the one press
+  that did follow a dwell was preceded by a trace showing a genuine return to
+  0.20 mm. Holding at partial depth does not re-trigger. Repeated on W at
+  `actuation 1.5, release 0.7, rt_lift 0.8`: six presses, **zero** of them
+  without a genuine release, while 1.1 mm and 1.2 mm dwells stayed silent.
 
-  | setting | value | why |
+  **What the hardware limits, and why 0.9 mm failed.** Two measured properties
+  of this board, not of the firmware:
+
+  | property | measured | consequence |
   |---|---|---|
-  | actuation | 2.00 mm | above the 0.8-1.5 mm hover band |
-  | rt_lift | 0.50 mm | re-arm window wider than the ~0.2 mm noise |
-  | rt_press | 0.30 mm | |
-  | release | 1.50 mm | matches the re-arm point |
+  | resting depth | **0.3 mm**, not 0 | the reset point must sit above it |
+  | motion noise | **~0.2 mm** | the window must be wider than it |
+  | travel | 3.5 mm | |
+  | reports during motion | coarse, 0.5-1.0 mm steps at ~115/s | fast lifts can be missed by sampling |
 
-  Over five dips with the finger never leaving the key, the captured depth
-  ranged 0.60-3.30 mm — never near the 0.3 mm rest, so no full release — with
-  one clean crossing of 2.0 mm per dip and no bounce at the threshold. One
-  keystroke per press, with re-arming.
+  A key rests at 0.3 mm, so a 0.9 mm trigger leaves only 0.6 mm above rest, and
+  a 0.4 mm window there is comparable to the noise. Worse, the finger naturally
+  hovers in **0.8-1.5 mm** during a press, so a 0.9 mm trigger sits *inside* the
+  band the finger occupies and slow presses recross it — each crossing being a
+  legitimate trigger, which reads as machine-gunning but is correct behaviour.
+  A Wooting fits a 0.3 mm window at a 0.9 mm trigger because it reads true zero
+  with quieter sensing.
 
-  The constraint is arithmetic: the window must be wider than the noise and the
-  re-arm point must sit above the resting depth, so `actuation` has to clear
-  roughly `0.3 + 0.2 + margin`. Around 1.5-2.0 mm works; below about 1.0 mm the
-  window is inside the noise and the key machine-guns. A Wooting achieves a
-  0.3 mm window because it reads true zero with quieter sensing, so the same
-  mechanism feels coarser here: a deeper trigger and a wider lift between
-  shots.
+  **Working configuration** (verified on A and on W/A/S/D):
 
-  So: `set-rt standard` and `set-key-trigger --standard` are correct, and v309
-  implements the reset point properly. The one thing they cannot give you is a
-  window narrower than this board's noise floor.
+  ```
+  actuation 1.5-2.0 mm,  release = actuation - rt_lift,  rt_lift 0.5-0.8 mm
+  ```
 
-  Alternatives considered while chasing this, and where they ended up:
+  The reset point then lands at 0.7-1.5 mm — clear of the 0.3 mm rest, with a
+  window wider than the noise — and counter-strafing behaves: release is crisp,
+  and a partial lift neither re-triggers nor keeps the key pressed. This is
+  Wooting's algorithm on non-Wooting hardware, reached through vendor settings
+  alone, so it behaves identically on Windows and macOS.
 
-  1. **Tuning the RT window — this is the answer.** `rt_lift` is honoured, so a
-     trigger above the hover band with a window wider than the noise gives
-     standard RT behaviour, as measured above. No patching required.
-  2. **DKS (base mode 2).** Discrete per-slot thresholds rather than a
-     continuous scan. Gives one keystroke per press with no re-arm at all,
-     which is *not* RT — but it does not auto-repeat when held, whereas the
-     tuned RT config above does not either, so it buys nothing here. Rejected.
+  Alternatives considered and rejected:
+
+  1. **DKS (base mode 2)** — discrete thresholds, one keystroke per press, but no
+     re-arm at all, so it is not RT. Also does not auto-repeat when held. Buys
+     nothing over the tuned RT configuration.
+  2. **Bottom deadzone** — measured: setting 0.4 mm leaves the resting depth at
+     0.2-0.3 mm. It does not restore the missing zero, so it cannot buy a lower
+     trigger.
+  3. **KBOPTION RT stability** (levels 0-5, 25 ms steps) — writable and it
+     round-trips, but it is *not* what the vendor UI calls "RT Stab". The bundle
+     defines that label as the travel required to re-trigger and reset, i.e.
+     `rt_press`/`rt_lift`. The KBOPTION byte had no effect on re-triggering and
+     is most likely a dead option on v309. Note also that a read immediately
+     after writing it returns the old value (the v309 stale-read quirk, section
+     7), so a driver that trusts its own write-back will misreport.
   3. **Host-side layer.** Read the depth stream, run the state machine in
      userspace, and emit keystrokes through uinput while detaching the kernel's
      HID driver so the board's own reports do not also reach the input stack.
