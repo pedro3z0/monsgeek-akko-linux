@@ -28,6 +28,9 @@ DATA_DIR="$PROJECT_ROOT/data"
 CACHE_DIR="$PROJECT_ROOT/.cache/device-db"
 
 WEBAPP_URL="https://app.monsgeek.com"
+# The real webapp bundle is ~2.6 MB. Anything far below that is a 404 or an error
+# page rather than JavaScript.
+MIN_BUNDLE_BYTES=100000
 INCLUDE_WEBAPP=true
 CLEAN_CACHE=false
 VENDORS=()
@@ -91,6 +94,53 @@ fi
 
 mkdir -p "$CACHE_DIR" "$DATA_DIR"
 
+# =============================================================================
+# Preflight: the extractors are Babel-based, so the node dev dependencies must be
+# installed. Without this the first `node` call dies with MODULE_NOT_FOUND, which
+# reads like a broken script rather than a missing `npm ci`.
+# =============================================================================
+
+ensure_node_deps() {
+    local parser="$DRIVER_EXTRACT/node_modules/@babel/parser"
+    if [ -d "$parser" ]; then
+        return
+    fi
+
+    echo "=== Installing extractor dependencies ==="
+    if ! command -v npm >/dev/null 2>&1; then
+        echo "Error: $DRIVER_EXTRACT/node_modules is missing and npm is not installed." >&2
+        echo "  Install Node.js/npm, then re-run; or extract with --no-webapp" >&2
+        exit 1
+    fi
+
+    (cd "$DRIVER_EXTRACT" && npm ci --no-audit --no-fund) || {
+        echo "Error: npm ci failed in $DRIVER_EXTRACT" >&2
+        exit 1
+    }
+    echo ""
+}
+
+ensure_node_deps
+
+# A downloaded "bundle" is only usable if it is really the JavaScript. A 404 or a
+# proxy error page comes back as a tiny JSON/HTML body, and feeding that to the
+# parser produces a mystifying error far from the cause.
+is_valid_bundle() {
+    local file="$1"
+    [ -s "$file" ] || return 1
+
+    # Real bundles are megabytes; anything under this is an error page.
+    local size
+    size=$(wc -c <"$file")
+    [ "$size" -ge "$MIN_BUNDLE_BYTES" ] || return 1
+
+    # Reject bodies that are obviously not JavaScript.
+    case "$(head -c 64 "$file" | tr -d '[:space:]')" in
+        '{'*|'['*|'<'*) return 1 ;;
+    esac
+    return 0
+}
+
 # Device JSONs in merge priority order, and the per-vendor LED matrix files / SVG dirs
 # that feed merge-matrices.js.
 DEVICE_JSONS=()
@@ -111,23 +161,52 @@ extract_webapp() {
         bundle=$(find "$webapp_dir" -maxdepth 1 -name "index.*.js" -type f 2>/dev/null | head -1)
     fi
 
+    # A cached file is only reused if it is still a real bundle. An earlier run may
+    # have cached a 404 body, and re-using that makes the breakage look permanent.
+    if [ -n "$bundle" ] && [ -f "$bundle" ] && ! is_valid_bundle "$bundle"; then
+        echo "Cached bundle is not usable ($(wc -c <"$bundle") bytes) — refetching"
+        rm -f "$bundle"
+        bundle=""
+    fi
+
     if [ -z "$bundle" ] || [ ! -f "$bundle" ]; then
         echo "Fetching from $WEBAPP_URL..."
-        local html name
-        html=$(curl -sL "$WEBAPP_URL")
-        name=$(echo "$html" | grep -oP 'src="/\K[^"]+\.js' | head -1)
-        [ -z "$name" ] && name=$(echo "$html" | grep -oP 'index\.[a-f0-9]+\.js' | head -1)
+        local html entry
+        html=$(curl -fsSL "$WEBAPP_URL/")
 
-        if [ -z "$name" ]; then
+        # The entry script is referenced by a *relative* path ("./js/index.<hash>.js"),
+        # so the directory is part of the name. Taking only "index.<hash>.js" and
+        # re-joining it to the site root 404s, which is how this used to fail.
+        entry=$(echo "$html" | grep -oP 'src="\K[^"]+\.js' | head -1 | sed 's|^\./||')
+        [ -z "$entry" ] && entry=$(echo "$html" | grep -oP 'index\.[a-f0-9]+\.js' | head -1)
+
+        if [ -z "$entry" ]; then
             echo "Warning: could not find the bundle name in the webapp HTML — skipping webapp"
             return
         fi
 
+        # Try the path as referenced first, then the common prefixes, so a change of
+        # layout does not need a code change here.
+        local name candidates url tmp
+        name=$(basename "$entry")
+        candidates=("$WEBAPP_URL/$entry" "$WEBAPP_URL/js/$name" "$WEBAPP_URL/$name")
+
         mkdir -p "$webapp_dir"
-        bundle="$webapp_dir/$name"
-        if [ ! -f "$bundle" ]; then
-            echo "Downloading: $WEBAPP_URL/$name"
-            curl -sL "$WEBAPP_URL/$name" -o "$bundle"
+        tmp="$webapp_dir/.download.$$"
+        for url in "${candidates[@]}"; do
+            echo "Downloading: $url"
+            if curl -fsSL "$url" -o "$tmp" 2>/dev/null && is_valid_bundle "$tmp"; then
+                bundle="$webapp_dir/$name"
+                mv "$tmp" "$bundle"
+                break
+            fi
+        done
+        rm -f "$tmp"
+
+        if [ -z "$bundle" ] || [ ! -f "$bundle" ]; then
+            echo "Warning: no usable bundle at any of: ${candidates[*]}" >&2
+            echo "  The site may have moved the bundle; re-run once it serves it again." >&2
+            return
         fi
     fi
     echo "Bundle: $bundle ($(du -h "$bundle" | cut -f1))"
@@ -209,6 +288,36 @@ if [ ${#DEVICE_JSONS[@]} -eq 0 ]; then
     echo "Error: no device data extracted!"
     exit 1
 elif [ ${#DEVICE_JSONS[@]} -eq 1 ]; then
+    # A webapp-only run replaces the database outright. The committed database is
+    # usually a merge of the webapp *and* vendor workspaces, so this silently drops
+    # every vendor-only device — hundreds of them. Say so before overwriting.
+    if [ -f "$DEVICES_FILE" ]; then
+        count_devices() {
+            node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).devices.length)' "$1"
+        }
+        before=$(count_devices "$DEVICES_FILE")
+        after=$(count_devices "${DEVICE_JSONS[0]}")
+        if [ "$before" -gt $((after * 3 / 2)) ]; then
+            echo "Warning: this run yields $after devices but $DEVICES_FILE holds $before."
+            echo "  No --vendor was given, so vendor-only devices will be dropped."
+            echo "  Rebuild the full database with --vendor <tag>, or restore with:"
+            echo "    git checkout -- data/devices.json data/key_layouts.json"
+            if [ -t 0 ]; then
+                read -r -p "  Overwrite anyway? [y/N] " reply
+                case "$reply" in
+                    [yY]) ;;
+                    *)
+                        echo "Aborted — database left untouched."
+                        exit 1
+                        ;;
+                esac
+            else
+                echo "  Not a terminal, so not overwriting."
+                exit 1
+            fi
+        fi
+    fi
+
     cp "${DEVICE_JSONS[0]}" "$DEVICES_FILE"
     src="${DEVICE_JSONS[0]%.json}"
     [ -f "${src}_layouts.json" ] && cp "${src}_layouts.json" "$LAYOUTS_FILE"
