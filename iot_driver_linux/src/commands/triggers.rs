@@ -689,6 +689,52 @@ pub fn set_rt(
     Ok(())
 }
 
+/// Get or set the Rapid Trigger flavour on a ry5088-flasher custom-firmware board.
+///
+/// This is a firmware **extension** (opcode 0x1F/0x9F) that the stock RongYuan
+/// firmware does not implement. On stock the read only echoes the opcode and
+/// reports `traditional`, so treat a write as a no-op there (the real stock
+/// behaviour is always continuous; see docs/FUN60_PRO.md §6).
+pub fn rt_flavour(keyboard: &KeyboardInterface, mode: Option<&str>) -> CommandResult {
+    match mode {
+        None => match keyboard.get_rt_flavour() {
+            Ok(1) => println!("Rapid Trigger flavour: continuous (CRT, stock behaviour)"),
+            Ok(_) => println!("Rapid Trigger flavour: traditional (classic RT)"),
+            Err(e) => return Err(format!("Failed to read RT flavour: {e}").into()),
+        },
+        Some(m) => {
+            let continuous = match m.to_lowercase().as_str() {
+                "continuous" | "crt" | "cont" | "1" | "stock" => true,
+                "traditional" | "trad" | "classic" | "0" => false,
+                other => {
+                    return Err(format!(
+                        "unknown RT flavour {other:?} — use 'traditional' or 'continuous'"
+                    )
+                    .into());
+                }
+            };
+            keyboard
+                .set_rt_flavour(continuous)
+                .map_err(|e| format!("Failed to set RT flavour: {e}"))?;
+            // Read back so a no-op (stock firmware) is visible rather than assumed.
+            let now = keyboard.get_rt_flavour().unwrap_or(u8::MAX);
+            println!(
+                "Rapid Trigger flavour set to {}",
+                if continuous { "continuous (CRT)" } else { "traditional" }
+            );
+            match now {
+                1 if continuous => {}
+                0 if !continuous => {}
+                _ => println!(
+                    "  note: read back {now} — this board's firmware may not implement the \
+                     RT-flavour extension (only ry5088-flasher custom firmware does)"
+                ),
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Set release point for all keys
 pub fn set_release(keyboard: &KeyboardInterface, mm: f32) -> CommandResult {
     let precision = keyboard.get_precision().unwrap_or_default();

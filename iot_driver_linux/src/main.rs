@@ -176,6 +176,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 commands::triggers::set_rt(kb, &value, actuation, sensitivity)
             })?;
         }
+        Some(Commands::RtFlavour { mode }) => {
+            commands::with_keyboard_on_profile(&ctx, |kb| {
+                commands::triggers::rt_flavour(kb, mode.as_deref())
+            })?;
+        }
         Some(Commands::SetRelease { mm }) => {
             commands::with_keyboard_on_profile(&ctx, |kb| commands::triggers::set_release(kb, mm))?;
         }

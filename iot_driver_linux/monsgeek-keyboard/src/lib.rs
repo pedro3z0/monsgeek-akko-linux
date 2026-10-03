@@ -114,6 +114,15 @@ pub const SNAPTAP_UNBOUND: u8 = 0xFF;
 /// the written key. Measured floor is ~200 ms; this carries margin.
 const MAGNETISM_SETTLE_MS: u64 = 250;
 
+/// Rapid Trigger flavour opcodes — a **ry5088-flasher firmware extension** (the
+/// custom open firmware at github.com/puremind/ry5088-flasher, `common/
+/// vendor_proto.c`). `RT_FLAVOUR_SET` writes byte 1 = 0 (traditional RT) or
+/// 1 (continuous RT, the stock CRT behaviour); `RT_FLAVOUR_GET` reads it back
+/// the same way. Stock RongYuan firmware does not implement these, so on stock
+/// the GET only echoes the opcode and reads back as 0.
+pub const RT_FLAVOUR_SET: u8 = 0x1F;
+pub const RT_FLAVOUR_GET: u8 = 0x9F;
+
 /// High-level keyboard interface using any transport
 ///
 /// Provides convenient methods for keyboard features like LED control,
@@ -1526,7 +1535,6 @@ impl KeyboardInterface {
             .send_command(cmd_byte, data, ChecksumType::Bit7)?;
         Ok(())
     }
-
     /// Send a raw command with **no** inter-command flow-control delay, for
     /// high-rate streaming (audio visualizer, screen color). Plain
     /// [`send_raw_cmd`] sleeps `DEFAULT_DELAY_MS` (100ms) after every send —
@@ -1538,6 +1546,28 @@ impl KeyboardInterface {
     pub fn send_raw_cmd_fast(&self, cmd_byte: u8, data: &[u8]) -> Result<(), KeyboardError> {
         self.transport
             .send_command_with_delay(cmd_byte, data, ChecksumType::Bit7, 0)?;
+        Ok(())
+    }
+
+    // === Rapid Trigger flavour (ry5088-flasher firmware EXTENSION) ===
+
+    /// Read the Rapid Trigger flavour. Returns `0` = traditional, `1` =
+    /// continuous (CRT). This is a firmware extension (`GET_RTMODE`, opcode
+    /// 0x9F) that stock RongYuan firmware does not implement — there the reply
+    /// is just the opcode echo and this returns 0.
+    pub fn get_rt_flavour(&self) -> Result<u8, KeyboardError> {
+        let resp = self
+            .transport
+            .query_command(RT_FLAVOUR_GET, &[], ChecksumType::Bit7)?;
+        Ok(resp.get(1).copied().unwrap_or(0) & 1)
+    }
+
+    /// Set the Rapid Trigger flavour: `0` = traditional, `1` = continuous (CRT).
+    /// Firmware extension (`SET_RTMODE`, opcode 0x1F). See [`Self::get_rt_flavour`].
+    pub fn set_rt_flavour(&self, continuous: bool) -> Result<(), KeyboardError> {
+        let data = [if continuous { 1u8 } else { 0u8 }];
+        self.transport
+            .send_command(RT_FLAVOUR_SET, &data, ChecksumType::Bit7)?;
         Ok(())
     }
 

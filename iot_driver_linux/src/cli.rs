@@ -254,6 +254,19 @@ pub enum Commands {
         sensitivity: Option<f32>,
     },
 
+    /// Get or set the Rapid Trigger flavour on a ry5088-flasher (custom-firmware)
+    /// board: "traditional" (classic RT — the trigger zone is only below the
+    /// actuation point) or "continuous" (stock CRT — the whole travel until full
+    /// release). With no argument it reads the current setting.
+    ///
+    /// This is a firmware EXTENSION (opcode 0x1F/0x9F) that stock firmware does
+    /// not implement; on stock it will simply echo and report 0.
+    #[command(visible_aliases = ["rt-mode", "rtflavor", "rtf"])]
+    RtFlavour {
+        /// "traditional" | "continuous" (omit to read)
+        mode: Option<String>,
+    },
+
     /// Set release point for all keys
     #[command(visible_alias = "srl")]
     SetRelease {
