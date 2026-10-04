@@ -362,8 +362,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
 
         // === Debug Commands ===
-        Some(Commands::Depth { raw, zero, verbose }) => {
-            commands::with_keyboard(&ctx, |kb| commands::debug::depth(kb, raw, zero, verbose))?;
+        Some(Commands::Depth {
+            raw,
+            zero,
+            verbose,
+            tare,
+        }) => {
+            commands::with_keyboard(&ctx, |kb| {
+                commands::debug::depth(kb, raw, zero, verbose, tare)
+            })?;
         }
         Some(Commands::TestTransport) => {
             commands::debug::test_transport(&ctx)?;

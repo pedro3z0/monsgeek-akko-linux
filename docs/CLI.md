@@ -323,6 +323,32 @@ leave no usable release point are refused rather than written.
 
 **Aliases:** `rapid-trigger`, `rt`
 
+### rt-flavour
+
+Pick the Rapid-Trigger flavour on either firmware.
+
+```bash
+iot_driver rt-flavour                # show the current flavour
+iot_driver rt-flavour traditional    # classic RT: release = actuation - sensitivity
+iot_driver rt-flavour continuous     # CRT: low release point, re-fires in the band
+```
+
+On custom (ry5088-flasher) firmware this flips the real engine switch
+(`SET_RTMODE`/`GET_RTMODE`, opcode 0x1F/0x9F). Stock firmware has no such
+switch — its engine is continuous by construction — so the flavour is read
+from the travel table instead (traditional ⇔ release sits exactly one
+sensitivity under actuation) and a write stores the equivalent mapping
+(*press 1.50 / lift 1.10 or 0.50 / rt 0.40*), key by key through the same
+per-key writes the vendor web app uses. The all-keys paged SET the board
+silently drops is not used. Only keys that differ are touched, and the write
+is read back after the firmware's ~2 s commit settle, so the report is the
+table the board actually serves.
+
+Stock caveat: the table shapes *where* the continuous engine re-fires, it
+cannot remove the behaviour itself — `traditional` raises the release point
+to the actuation point, the closest stock can get. See
+[docs/FUN60_PRO.md](FUN60_PRO.md) §6.
+
 ### set-release
 
 Set release point for all keys.
@@ -643,7 +669,14 @@ iot_driver depth            # Normal output
 iot_driver depth -r         # Raw hex bytes
 iot_driver depth -z         # Show zero-depth reports
 iot_driver depth -v         # Verbose status
+iot_driver depth -t         # Tare: released keys read 0.00mm (see below)
 ```
+
+The switches rest ~0.3mm depressed and the firmware reports absolute travel,
+so a fully released key shows 0.3–0.4mm — a hardware characteristic, not a
+calibration error (see [docs/FUN60_PRO.md](FUN60_PRO.md) §6). `--tare`
+subtracts each key's resting value so released keys read 0.00 and presses
+measure from the rest position instead.
 
 **Aliases:** `keydepth`
 

@@ -136,6 +136,7 @@ pub fn depth(
     show_raw: bool,
     show_zero: bool,
     verbose: bool,
+    tare: bool,
 ) -> CommandResult {
     println!("Device: {}", keyboard.device_name());
 
@@ -177,6 +178,21 @@ pub fn depth(
     println!("\nMonitoring key depth (Ctrl+C to stop)...");
     println!("Press keys to see depth data.\n");
 
+    // Tare: the switches rest ~0.3mm depressed and the firmware reports
+    // absolute travel, so a released key reads 0.3-0.4mm. Subtract each key's
+    // first-seen (resting) value so a released key reads 0.00.
+    let mut baselines: HashMap<u8, u16> = HashMap::new();
+    if tare {
+        println!(
+            "Tare on: each key's resting depth is subtracted (released keys read 0.00mm).\n"
+        );
+    } else {
+        println!(
+            "Tip: keys resting at 0.3-0.4mm is expected — the switches rest slightly \
+             depressed.\n     Use --tare to subtract it and read 0.00mm at rest.\n"
+        );
+    }
+
     let running = setup_interrupt_handler();
 
     let mut report_count = 0u64;
@@ -213,13 +229,25 @@ pub fn depth(
             keys.sort_by_key(|(k, _)| *k);
 
             for (key_idx, (raw, depth_mm)) in &keys {
+                // With --tare each key's resting offset (the ~0.3mm the switches
+                // physically rest depressed, reported as absolute travel) is
+                // subtracted, so a released key shows 0.00 instead of 0.3-0.4.
+                // The baseline is the first value each key reports; since the
+                // firmware reports resting keys, that is the at-rest value.
+                let (raw, depth_mm) = if tare {
+                    let base = *baselines.entry(**key_idx).or_insert(*raw);
+                    let shown = depth_mm - depth_mm.min(precision.raw_to_mm(base) as f32);
+                    (raw.saturating_sub(base), shown)
+                } else {
+                    (*raw, *depth_mm)
+                };
                 // Skip zero depths unless show_zero
-                if *raw == 0 && !show_zero {
+                if raw == 0 && !show_zero {
                     continue;
                 }
 
                 // Compact bar (20 chars max)
-                let bar_len = ((*depth_mm * 5.0).min(20.0)) as usize;
+                let bar_len = ((depth_mm * 5.0).min(20.0)) as usize;
                 let bar: String = "█".repeat(bar_len);
                 let empty: String = "░".repeat(20 - bar_len);
 

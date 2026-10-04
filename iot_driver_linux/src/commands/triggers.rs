@@ -691,21 +691,161 @@ pub fn set_rt(
 
 /// Get or set the Rapid Trigger flavour on a ry5088-flasher custom-firmware board.
 ///
-/// This is a firmware **extension** (opcode 0x1F/0x9F) that the stock RongYuan
-/// firmware does not implement. On stock the read only echoes the opcode and
-/// reports `traditional`, so treat a write as a no-op there (the real stock
-/// behaviour is always continuous; see docs/FUN60_PRO.md §6).
+/// Both Rapid-Trigger flavours, on **either** firmware.
+///
+/// Custom (ry5088-flasher) firmware has a real engine switch, so we use it: the
+/// `SET_RTMODE`/`GET_RTMODE` extension (0x1F/0x9F). Stock firmware always runs
+/// the continuous engine and has no such byte — there the flavour is expressed
+/// through the travel table, the only lever stock gives us:
+///
+/// * **traditional** — release point one sensitivity *below* actuation
+///   (`lift = press - rt`), so the key fully un-arms before it can re-fire.
+/// * **continuous** — the vendor preset shape: a *low* release point, so the key
+///   keeps re-firing inside the `lift .. press` band (CRT).
+///
+/// These two stock mappings are the ones already verified on this board and
+/// captured in `tests/fixtures/fun60pro/`.
+const RT_TRADITIONAL_ACTUATION_MM: f32 = 1.5;
+const RT_TRADITIONAL_SENSITIVITY_MM: f32 = 0.4;
+/// Vendor-preset release point for the continuous variant (raw 50 = 0.50 mm).
+const RT_CONTINUOUS_LIFT_MM: f32 = 0.5;
+
+/// Builds that answer the RT-flavour extension report v400 or newer; stock
+/// FUN60 Pro firmware is v309.
+const RT_FLAVOUR_MIN_VERSION: u16 = 0x0400;
+
+fn is_flavour_capable(keyboard: &KeyboardInterface) -> bool {
+    keyboard
+        .get_version()
+        .map(|v| v.raw >= RT_FLAVOUR_MIN_VERSION)
+        .unwrap_or(false)
+}
+
+/// Turn the current travel tables into a flavour — for stock firmware, where
+/// there is no flavour byte to read. Traditional puts the release point exactly
+/// one sensitivity under actuation; continuous leaves it far below.
+fn stock_flavour(keyboard: &KeyboardInterface) -> Result<bool, String> {
+    let t = keyboard
+        .get_all_triggers()
+        .map_err(|e| format!("reading trigger tables: {e}"))?;
+    let press = t.press_travel.first().copied().unwrap_or(0) as u32;
+    let lift = t.lift_travel.first().copied().unwrap_or(0) as u32;
+    let sens = t.rt_press.first().copied().unwrap_or(0) as u32;
+    if sens == 0 || press == 0 {
+        return Err("the trigger table is all zeros — set a mapping first \
+                    (`set-rt standard <act> <sens>`) or pass an explicit flavour"
+            .into());
+    }
+    Ok(lift < press.saturating_sub(sens))
+}
+
+/// Write the stock-firmware equivalent of a flavour (travel tables + RT flag).
+///
+/// The all-keys paged SET form (`set_magnetism_u16`) is not honoured by this
+/// firmware — the board acks it but keeps serving the old table. The vendor
+/// web app never writes whole tables either; it writes each key through the
+/// per-key "simple" form (`set_key_trigger`), which does land. So apply the
+/// mapping key by key, preserving each key's base mode and arming RT as we go.
+fn apply_stock_flavour(keyboard: &KeyboardInterface, continuous: bool) -> Result<(), String> {
+    let precision = keyboard.get_precision().unwrap_or_default();
+    let act = TravelDepth::from_mm(RT_TRADITIONAL_ACTUATION_MM, precision);
+    let sens = TravelDepth::from_mm(RT_TRADITIONAL_SENSITIVITY_MM, precision);
+    let plan = standard_rt_plan(
+        RT_TRADITIONAL_ACTUATION_MM,
+        RT_TRADITIONAL_SENSITIVITY_MM,
+        precision,
+    )?;
+    let lift = if continuous {
+        TravelDepth::from_mm(RT_CONTINUOUS_LIFT_MM, precision)
+    } else {
+        TravelDepth::from_raw(plan.release)
+    };
+
+    // Per-key "simple" writes (the vendor-webapp form), not the all-keys paged
+    // SET the board silently drops. Only keys that differ are touched: 5
+    // simple-writes per key at ~30-250ms each, so a full rewrite is slow.
+    // `key_count` (82 here) only covers the populated slots; the tail of the
+    // 84-position matrix keeps its own values, so iterate the whole decoded
+    // table instead of stopping at key_count.
+    let all = keyboard
+        .get_all_triggers()
+        .map_err(|e| format!("reading trigger tables: {e}"))?;
+    let total = all
+        .press_travel
+        .len()
+        .max(all.lift_travel.len())
+        .max(all.rt_press.len())
+        .max(all.rt_lift.len())
+        .max(all.key_modes.len());
+    let mut changed = 0u32;
+    for idx in 0..total {
+        let cur_mode = ModeByte::from_u8(all.key_modes.get(idx).copied().unwrap_or(0));
+        let same = all.press_travel.get(idx).copied().unwrap_or(u16::MAX) == act.raw()
+            && all.lift_travel.get(idx).copied().unwrap_or(u16::MAX) == lift.raw()
+            && all.rt_press.get(idx).copied().unwrap_or(u16::MAX) == sens.raw()
+            && all.rt_lift.get(idx).copied().unwrap_or(u16::MAX) == sens.raw()
+            && cur_mode.rapid_trigger;
+        if same {
+            continue;
+        }
+        let settings = KeyTriggerSettings {
+            key_index: idx as u8,
+            actuation: act.raw(),
+            deactuation: lift.raw(),
+            rt_press: sens.raw(),
+            rt_lift: sens.raw(),
+            mode: cur_mode.base,
+            rapid_trigger: true,
+        };
+        keyboard
+            .set_key_trigger(&settings)
+            .map_err(|e| format!("key {idx}: {e}"))?;
+        changed += 1;
+    }
+
+    println!(
+        "  Actuation:   {}   RT sensitivity: {}   Release: {}   ({} of {} table slots rewritten)",
+        act.format(precision),
+        sens.format(precision),
+        lift.format(precision),
+        changed,
+        total,
+    );
+    Ok(())
+}
 pub fn rt_flavour(keyboard: &KeyboardInterface, mode: Option<&str>) -> CommandResult {
+    let native = is_flavour_capable(keyboard);
+
     match mode {
-        None => match keyboard.get_rt_flavour() {
-            Ok(1) => println!("Rapid Trigger flavour: continuous (CRT, stock behaviour)"),
-            Ok(_) => println!("Rapid Trigger flavour: traditional (classic RT)"),
-            Err(e) => return Err(format!("Failed to read RT flavour: {e}").into()),
-        },
+        None => {
+            if native {
+                match keyboard.get_rt_flavour() {
+                    Ok(1) => println!("Rapid Trigger flavour: continuous (CRT)  [engine switch]"),
+                    Ok(_) => println!("Rapid Trigger flavour: traditional      [engine switch]"),
+                    Err(e) => return Err(format!("Failed to read RT flavour: {e}").into()),
+                }
+            } else {
+                match stock_flavour(keyboard) {
+                    Ok(true) => println!(
+                        "Rapid Trigger flavour: continuous (CRT)  [inferred: release sits far \
+                         below actuation]"
+                    ),
+                    Ok(false) => println!(
+                        "Rapid Trigger flavour: traditional      [inferred: release = \
+                         actuation - sensitivity]"
+                    ),
+                    Err(e) => return Err(e.into()),
+                }
+                println!(
+                    "  note: stock firmware has no flavour switch, so this is read from the \
+                     travel tables. `rt-flavour traditional|continuous` rewrites them."
+                );
+            }
+        }
         Some(m) => {
             let continuous = match m.to_lowercase().as_str() {
                 "continuous" | "crt" | "cont" | "1" | "stock" => true,
-                "traditional" | "trad" | "classic" | "0" => false,
+                "traditional" | "trad" | "classic" | "normal" | "0" => false,
                 other => {
                     return Err(format!(
                         "unknown RT flavour {other:?} — use 'traditional' or 'continuous'"
@@ -713,22 +853,40 @@ pub fn rt_flavour(keyboard: &KeyboardInterface, mode: Option<&str>) -> CommandRe
                     .into());
                 }
             };
-            keyboard
-                .set_rt_flavour(continuous)
-                .map_err(|e| format!("Failed to set RT flavour: {e}"))?;
-            // Read back so a no-op (stock firmware) is visible rather than assumed.
-            let now = keyboard.get_rt_flavour().unwrap_or(u8::MAX);
-            println!(
-                "Rapid Trigger flavour set to {}",
-                if continuous { "continuous (CRT)" } else { "traditional" }
-            );
-            match now {
-                1 if continuous => {}
-                0 if !continuous => {}
-                _ => println!(
-                    "  note: read back {now} — this board's firmware may not implement the \
-                     RT-flavour extension (only ry5088-flasher custom firmware does)"
-                ),
+
+            if native {
+                keyboard
+                    .set_rt_flavour(continuous)
+                    .map_err(|e| format!("Failed to set RT flavour: {e}"))?;
+                let now = keyboard.get_rt_flavour().unwrap_or(u8::MAX);
+                println!(
+                    "Rapid Trigger flavour set to {} (engine switch)",
+                    if continuous { "continuous (CRT)" } else { "traditional" }
+                );
+                if now != u8::from(continuous) {
+                    println!("  warning: read back {now}, expected {}", u8::from(continuous));
+                }
+            } else {
+                println!(
+                    "Stock firmware: no flavour switch — writing the equivalent travel table \
+                     for {}",
+                    if continuous { "continuous (CRT)" } else { "traditional" }
+                );
+                apply_stock_flavour(keyboard, continuous)?;
+                // This firmware serves the previous table for up to ~2 s after a
+                // commit (docs/FUN60_PRO.md §7), so settle before verifying.
+                std::thread::sleep(std::time::Duration::from_millis(2100));
+                match stock_flavour(keyboard) {
+                    Ok(true) => println!("  verified: continuous (CRT)"),
+                    Ok(false) => println!("  verified: traditional"),
+                    Err(e) => println!("  could not verify: {e}"),
+                }
+                println!(
+                    "\n  caveat: stock's RT engine is continuous by construction. The travel \
+                     table shapes *where* it re-fires; it cannot remove the behaviour itself. \
+                     'traditional' raises the release point to the actuation point, which is \
+                     the closest stock can get (docs/FUN60_PRO.md §6)."
+                );
             }
         }
     }

@@ -627,6 +627,12 @@ pub enum Commands {
         /// Verbose status updates
         #[arg(short, long)]
         verbose: bool,
+        /// Subtract each key's resting depth so a fully released key reads
+        /// 0.00mm. The switches rest ~0.3mm depressed and the firmware reports
+        /// absolute travel, so without this every key shows 0.3-0.4mm at rest
+        /// (a hardware characteristic, see docs/FUN60_PRO.md section 6).
+        #[arg(short, long)]
+        tare: bool,
     },
 
     // === Firmware Commands ===
