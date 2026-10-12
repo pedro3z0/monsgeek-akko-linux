@@ -787,6 +787,10 @@ impl App {
                 }
             );
 
+            if val == 0 && self.priority_scan.unwrap_or(0) != 0 {
+                self.priority_scan = Some(0);
+            }
+
             tokio::spawn(async move {
                 if val != 0 {
                     let _ = kb.set_led_raw_option(1, 0, 0, 0, 0, 0, 0x00);
@@ -794,6 +798,7 @@ impl App {
                 }
                 let _ = kb.set_turbo_mode(val);
                 if val == 0 {
+                    let _ = kb.set_priority_mask(0, 0);
                     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
                     let _ = kb.set_led_raw_option(1, 4, 2, 255, 255, 255, 0x00);
                 }
@@ -838,6 +843,10 @@ impl App {
             .unwrap_or(false);
         if !has_priority {
             self.status_msg = "Priority scan: not supported (requires CAP_PRIORITY_SCAN firmware patch)".into();
+            return;
+        }
+        if val != 0 && self.turbo_mode.unwrap_or(0) == 0 {
+            self.status_msg = "Priority scan requires Turbo Mode: enable Turbo Mode first".into();
             return;
         }
         if let Some(ref keyboard) = self.keyboard {

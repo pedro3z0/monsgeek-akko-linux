@@ -981,6 +981,10 @@ pub fn turbo(keyboard: &KeyboardInterface, mode: Option<&str>) -> CommandResult 
                 .map_err(|e| format!("Failed to set turbo mode: {e}"))?;
 
             if val == 0 {
+                // If priority scan was enabled, reset it to off as well
+                if keyboard.get_priority_mask().map(|(m, _)| m).unwrap_or(0) != 0 {
+                    let _ = keyboard.set_priority_mask(0, 0);
+                }
                 // Give main loop tick a moment to resume before commanding LED restore
                 std::thread::sleep(std::time::Duration::from_millis(30));
                 // Restore standard white lighting once turbo is off
@@ -1052,6 +1056,18 @@ pub fn priority(keyboard: &KeyboardInterface, preset: Option<&str>) -> CommandRe
                     .into());
                 }
             };
+
+            if mode != 0 {
+                let turbo_on = keyboard.get_turbo_mode().unwrap_or(0) != 0;
+                if !turbo_on {
+                    return Err(
+                        "Priority scan requires Turbo mode to be enabled first (`akko turbo on`).\n\
+                         Priority scanning relies on the zero-jitter tight loop without background housekeeping pauses."
+                            .into(),
+                    );
+                }
+            }
+
             keyboard
                 .set_priority_mask(mode, 0)
                 .map_err(|e| format!("Failed to set priority mask: {e}"))?;

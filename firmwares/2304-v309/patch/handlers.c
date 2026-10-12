@@ -171,24 +171,33 @@ int handle_matrix_scan(void) {
     if (g_turbo_mode != 0) {
         /* Keep main loop tick counter at 0 to suppress periodic RGB/housekeeping pauses */
         *MAIN_LOOP_TICK = 0;
-    }
 
-    if (g_priority_mode != 0) {
-        /* Interleaved scan: 3 priority passes (0, 1, 2) per 1 full pass (3) */
-        volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
-        g_scan_pass = (g_scan_pass + 1) & 3;
+        if (g_priority_mode != 0) {
+            /* Interleaved scan: 3 priority passes (0, 1, 2) per 1 full pass (3) */
+            volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
+            g_scan_pass = (g_scan_pass + 1) & 3;
 
-        const uint8_t *src = (g_scan_pass == 3) ? g_stock_mask : g_priority_mask;
-        for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-            hw_mask[i] = src[i];
+            const uint8_t *src = (g_scan_pass == 3) ? g_stock_mask : g_priority_mask;
+            for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
+                hw_mask[i] = src[i];
+            }
+        } else if (g_scan_pass != 0) {
+            /* Restore full stock mask if leaving priority mode */
+            volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
+            for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
+                hw_mask[i] = g_stock_mask[i];
+            }
+            g_scan_pass = 0;
         }
-    } else if (g_scan_pass != 0) {
-        /* Restore full stock mask if leaving priority mode */
-        volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
-        for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-            hw_mask[i] = g_stock_mask[i];
+    } else {
+        /* Turbo is off: priority scan cannot run without zero-jitter loop */
+        if (g_scan_pass != 0) {
+            volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
+            for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
+                hw_mask[i] = g_stock_mask[i];
+            }
+            g_scan_pass = 0;
         }
-        g_scan_pass = 0;
     }
 
     return 0;   /* Proceed with matrix_scan */
