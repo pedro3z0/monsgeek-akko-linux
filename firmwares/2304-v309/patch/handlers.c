@@ -93,8 +93,10 @@ int handle_rt_eval(uint32_t ctx, uint32_t key_idx) {
 
 /* ── Vendor Command Hook ─────────────────────────────────────────────────── */
 
-/* Capability bit 7: standard_rt */
+/* Capability bit 7: standard_rt, bit 8: fast_scan (raw 1-sample 0.25ms ADC scan) */
 #define CAP_STANDARD_RT   (1u << 7)
+#define CAP_FAST_SCAN     (1u << 8)
+#define CAPABILITIES      (CAP_STANDARD_RT | CAP_FAST_SCAN)
 
 int handle_vendor_cmd(void) {
     if (!patch_initialized) {
@@ -118,14 +120,14 @@ int handle_vendor_cmd(void) {
          *   cmd_buf[4] = 0xFE (MAGIC_LO)
          *   cmd_buf[5] = 1    (patch version)
          *   cmd_buf[6] = 0x80 (capabilities lo: bit 7 = standard_rt)
-         *   cmd_buf[7] = 0x00 (capabilities hi)
+         *   cmd_buf[7] = 0x01 (capabilities hi: bit 8 = fast_scan)
          *   cmd_buf[8..15] = "MONSMOD\0"
          */
         cmd_buf[3]  = 0xCA;
         cmd_buf[4]  = 0xFE;
         cmd_buf[5]  = 1;
-        cmd_buf[6]  = (uint8_t)(CAP_STANDARD_RT & 0xFF);
-        cmd_buf[7]  = (uint8_t)((CAP_STANDARD_RT >> 8) & 0xFF);
+        cmd_buf[6]  = (uint8_t)(CAPABILITIES & 0xFF);
+        cmd_buf[7]  = (uint8_t)((CAPABILITIES >> 8) & 0xFF);
         cmd_buf[8]  = 'M';
         cmd_buf[9]  = 'O';
         cmd_buf[10] = 'N';

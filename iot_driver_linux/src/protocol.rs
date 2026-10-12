@@ -850,6 +850,8 @@ pub mod patch_info {
     pub const CAP_ANIM_ENGINE: u16 = 1 << 6;
     /// Capability: Standard (Wooting-style) Rapid Trigger
     pub const CAP_STANDARD_RT: u16 = 1 << 7;
+    /// Capability: Fast scan (raw 1-sample 0.25ms ADC scan without boxcar/EMA filter lag)
+    pub const CAP_FAST_SCAN: u16 = 1 << 8;
 
     pub fn capability_names(caps: u16) -> Vec<&'static str> {
         let mut names = Vec::new();
@@ -876,6 +878,9 @@ pub mod patch_info {
         }
         if caps & CAP_STANDARD_RT != 0 {
             names.push("standard_rt");
+        }
+        if caps & CAP_FAST_SCAN != 0 {
+            names.push("fast_scan");
         }
         names
     }

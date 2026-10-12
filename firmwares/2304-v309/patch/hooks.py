@@ -49,7 +49,14 @@ HOOKS = [
     ),
 ]
 
-BINARY_PATCHES = []
+BINARY_PATCHES = [
+    BinaryPatch(
+        0x08005C10,
+        b'\x40\xd0',  # beq.n 0x8005c94
+        b'\x00\xbf',  # nop
+        "ADC scan: bypass 8-sample boxcar & 2-sample EMA filter (raw 1-sample fast path)",
+    ),
+]
 
 project = PatchProject(
     hooks=HOOKS,
