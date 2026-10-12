@@ -107,9 +107,7 @@ static uint8_t g_priority_mode;
 static uint64_t g_active_priority_mask;
 
 #define MASK_TABLE_ADDR   0x2000283Eu
-#define MASK_TABLE_ADDR   0x2000283Eu
 #define MASK_TABLE_SIZE   84u
-#define MAIN_LOOP_TICK    ((volatile uint8_t *)0x20000468)
 
 /* Hardware stock skip mask for FUN60 Pro (60-key ANSI in 14x6 matrix, dev_id 2304)
  * 0 = populated key to scan, 1 = unpopulated socket to skip */
@@ -189,9 +187,6 @@ int handle_matrix_scan(void) {
     }
 
     if (g_turbo_mode != 0) {
-        /* Keep main loop tick counter at 0 to suppress periodic RGB/housekeeping pauses */
-        *MAIN_LOOP_TICK = 0;
-
         if (g_priority_mode != 0) {
             /* Interleaved scan: 3 priority passes (0, 1, 2) per 1 full pass (3) */
             volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
