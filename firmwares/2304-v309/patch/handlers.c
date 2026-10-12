@@ -108,6 +108,7 @@ static uint64_t g_active_priority_mask;
 
 #define MASK_TABLE_ADDR   0x2000283Eu
 #define MASK_TABLE_SIZE   84u
+#define MATRIX_CUR_COL    ((volatile uint8_t *)0x20002925)
 
 /* Hardware stock skip mask for FUN60 Pro (60-key ANSI in 14x6 matrix, dev_id 2304)
  * 0 = populated key to scan, 1 = unpopulated socket to skip */
@@ -188,13 +189,15 @@ int handle_matrix_scan(void) {
 
     if (g_turbo_mode != 0) {
         if (g_priority_mode != 0) {
-            /* Interleaved scan: 3 priority passes (0, 1, 2) per 1 full pass (3) */
-            volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
-            g_scan_pass = (g_scan_pass + 1) & 3;
-
-            const uint8_t *src = (g_scan_pass == 3) ? g_stock_mask : g_priority_mask;
-            for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-                hw_mask[i] = src[i];
+            /* Switch scan pass only at the start of a full sweep (column 0) */
+            if (*MATRIX_CUR_COL == 0) {
+                /* 1:1 interleaved scan: 1 priority sweep, 1 full stock sweep */
+                g_scan_pass = (g_scan_pass + 1) & 1;
+                volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
+                const uint8_t *src = (g_scan_pass == 1) ? g_stock_mask : g_priority_mask;
+                for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
+                    hw_mask[i] = src[i];
+                }
             }
         } else if (g_scan_pass != 0) {
             /* Restore full stock mask if leaving priority mode */
