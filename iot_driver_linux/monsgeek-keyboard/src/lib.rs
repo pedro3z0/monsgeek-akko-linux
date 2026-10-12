@@ -2196,17 +2196,19 @@ impl KeyboardInterface {
             .transport
             .query_raw(cmd::GET_PATCH_INFO, &[], ChecksumType::Bit7)?;
 
-        // Response layout: resp[0]=cmd echo (0xE7), resp[1..2]=magic,
-        // resp[3]=ver, resp[4..5]=caps, resp[6..]=name.
-        // (GET_REPORT returns from lp_class_report_buf = cmd_buf+2,
-        //  handler writes magic at cmd_buf[3..4], so resp[1..2])
-        if resp.len() < 8 || resp[1] != 0xCA || resp[2] != 0xFE {
+        // Support both framings: [magic_hi, magic_lo, ...] (payload only)
+        // and [echo, magic_hi, magic_lo, ...] (echo + payload)
+        let (ver_off, caps_off, name_off) = if resp.len() >= 6 && resp[0] == 0xCA && resp[1] == 0xFE {
+            (2, 3, 5)
+        } else if resp.len() >= 7 && resp[1] == 0xCA && resp[2] == 0xFE {
+            (3, 4, 6)
+        } else {
             return Ok(None);
-        }
-        let version = resp[3];
-        let capabilities = u16::from_le_bytes([resp[4], resp[5]]);
-        let name_end = resp.len().min(14);
-        let name_bytes = &resp[6..name_end];
+        };
+        let version = resp[ver_off];
+        let capabilities = u16::from_le_bytes([resp[caps_off], resp[caps_off + 1]]);
+        let name_end = resp.len().min(name_off + 8);
+        let name_bytes = &resp[name_off..name_end];
         let name_len = name_bytes
             .iter()
             .position(|&b| b == 0)

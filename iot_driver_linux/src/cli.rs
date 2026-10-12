@@ -250,8 +250,10 @@ pub enum Commands {
         value: String,
         /// Actuation point in mm, for "standard"
         actuation: Option<f32>,
-        /// RT sensitivity in mm, for "standard" (release = actuation - this)
+        /// RT sensitivity in mm, for "standard"
         sensitivity: Option<f32>,
+        /// Optional release point in mm for "standard" (defaults to equal to actuation)
+        release: Option<f32>,
     },
 
     /// Get or set the Rapid Trigger flavour on a ry5088-flasher (custom-firmware)

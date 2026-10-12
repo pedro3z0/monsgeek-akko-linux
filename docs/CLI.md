@@ -344,10 +344,9 @@ silently drops is not used. Only keys that differ are touched, and the write
 is read back after the firmware's ~2 s commit settle, so the report is the
 table the board actually serves.
 
-Stock caveat: the table shapes *where* the continuous engine re-fires, it
-cannot remove the behaviour itself — `traditional` raises the release point
-to the actuation point, the closest stock can get. See
-[docs/FUN60_PRO.md](FUN60_PRO.md) §6.
+For true Standard Rapid Trigger (Wooting-style), the keyboard can run the
+patched firmware (`firmwares/2304-v309/patch/`), which disarms RT whenever travel
+rises above actuation. See [docs/FUN60_PRO.md](FUN60_PRO.md) §6.
 
 ### set-release
 

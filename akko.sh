@@ -55,6 +55,15 @@ hint() { printf '         %s\n' "$*"; }
 # local release build, then the debug build left behind by `cargo test`.
 find_driver() {
     local cand
+    if [[ -n "$DRIVER_DIR" && -x "$DRIVER_DIR/target/release/iot_driver" ]]; then
+        local local_bin="$DRIVER_DIR/target/release/iot_driver"
+        local sys_bin
+        sys_bin="$(command -v iot_driver 2>/dev/null)" || true
+        if [[ -z "$sys_bin" || "$local_bin" -nt "$sys_bin" ]]; then
+            echo "$local_bin"
+            return 0
+        fi
+    fi
     if cand="$(command -v iot_driver 2>/dev/null)"; then
         echo "$cand"
         return 0

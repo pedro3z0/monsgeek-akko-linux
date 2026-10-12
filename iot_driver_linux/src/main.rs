@@ -171,9 +171,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             value,
             actuation,
             sensitivity,
+            release,
         }) => {
             commands::with_keyboard_on_profile(&ctx, |kb| {
-                commands::triggers::set_rt(kb, &value, actuation, sensitivity)
+                commands::triggers::set_rt(kb, &value, actuation, sensitivity, release)
             })?;
         }
         Some(Commands::RtFlavour { mode }) => {

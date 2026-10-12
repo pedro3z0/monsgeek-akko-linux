@@ -214,78 +214,13 @@ Read: `[0xE5, sub, 0x01, page]` → 64 raw bytes per page.
   (user-tested). Value 1 is a key-disabler on v309, not a classic-RT mode, so
   treat unknown values as key-disablers until proven otherwise. Values 1, 6, 8
   and up are undocumented on this firmware.
-- Trial 2 (standard-RT mapping) ran on A/W/S/D as `press 1.50 / lift 1.10 /
-  rt_press 0.40 / rt_lift 0.40`, mode 128. The rationale: in Wooting-style RT
-  the key releases after `sensitivity` mm of lift, i.e.
-  `release = actuation - sensitivity`. The vendor preset's `lift 0.50` leaves a
-  1.0 mm hover band in which the key re-fires without ever crossing the
-  actuation point again, which is CRT behaviour by configuration. Two things had
-  to hold for config-only standard RT to be possible:
-  1. the key must turn off after ~0.4 mm of lift (not 0.5 mm), and
-  2. hovering at ~1.2 mm and pressing must **not** fire until 1.5 mm is crossed
-     again.
-  If (2) fires while hovering, the firmware re-triggers anywhere and
-  config-only standard RT is impossible — the fallback is a host-side layer or a
-  firmware patch.
+- **Standard Rapid Trigger (Wooting-style) vs Continuous RT:**
+  Stock firmware implements Rapid Trigger as continuous RT (CRT): the armed flag is only cleared when travel drops below the release floor (`d <= rel`), so once actuated, any relative lift/press cycle re-fires the key anywhere in the stroke.
 
-  **The answer: this firmware implements Rapid Trigger as *continuous* RT
-  (CRT), not fixed-point RT. Two earlier verdicts in this file were wrong, and
-  the correction is worth recording because the mistake is easy to repeat.**
-
-  A behavioural test said the opposite. With the reset point set near a full
-  release, eleven static dwells at 1.3-2.3 mm produced no press, which looked
-  like a working gate. It is not evidence of one: a key that needs a full
-  release before re-arming behaves that way whether its re-arm is a fixed
-  depth or a relative lift, because every test returned near rest. Conclusion
-  drawn from it ("config-only standard RT works, the release point is a real
-  gate") was not supported.
-
-  The algorithm is visible in an independent implementation:
-  [dot-agi/ry5088-flasher](https://github.com/dot-agi/ry5088-flasher),
-  `firmware/common/hall.c`, written against the same four vendor fields this
-  driver writes (`press_cmm`, `release_cmm`, `rt_press_cmm`, `rt_release_cmm`):
-
-  ```c
-  int rtp = COUNTS(c->rt_press_cmm);      /* 0x02 */
-  int rtl = COUNTS(c->rt_release_cmm);    /* 0x03 */
-  if (!k->pressed) {
-      if (d <= k->rt_ref) k->rt_ref = d;                 /* follow the valley */
-      int trip = k->rt_armed ? (d - k->rt_ref >= rtp)    /* relative RISE  */
-                             : (d >= act);                /* first actuation */
-      if (trip) { k->pressed = 1; k->rt_armed = 1; k->rt_ref = d; }
-  } else {
-      if (d >= k->rt_ref) k->rt_ref = d;                 /* follow the peak   */
-      if (k->rt_ref - d >= rtl) { k->pressed = 0; k->rt_ref = d; }  /* relative LIFT */
-  }
-  if (d <= rel) { k->pressed = 0; k->rt_armed = 0; k->rt_ref = d; }
-  ```
-
-  The re-arm test is `rt_ref - d >= rtl` — a lift *distance* from a tracked
-  peak. `release` never gates the re-trigger; it only disarms the key so the
-  next press must cross the actuation point again. That is CRT by construction,
-  and the two separate sensitivities (0x02/0x03) are its signature: they
-  describe *how far to move*, not *where to return to*. Standard RT needs only
-  a reset point.
-
-  **Consequence.** No setting on this firmware produces Wooting-style
-  behaviour. Raising the actuation point until the trigger sits above the
-  finger's hover band (0.8-1.5 mm) stops the relative-lift path from
-  misfiring during an ordinary press, which is why a deep trigger *looks* like
-  standard RT — but it is mitigation, not the feature. Measured hardware limits
-  that force this, all on the board rather than in code: resting depth **0.3 mm**
-  (not 0), motion noise **~0.2 mm**, travel 3.5 mm, and reports coarse during
-  motion (0.5-1.0 mm steps at ~115/s, so a fast lift can fall between samples).
-  The trigger therefore cannot go much below ~1.0-1.5 mm.
-
-  Working configuration, verified for counter-strafing on W/A/S/D:
-  `actuation 1.5, release 0.7, rt_press 0.3, rt_lift 0.8`, RT enabled. Single
-  clean trigger per press, re-arm without a full release, and — importantly —
-  the keyboard emits one `press-down` per press: a 30 s hold produced exactly
-  one HID press, so the "many" characters seen in a terminal are the OS
-  auto-repeating a held key, not the firmware re-firing. The vendor webapp shows
-  none for the same press because it does not implement auto-repeat. Only the
-  keyboard's own boot-keyboard HID reports (interface 0, `/dev/hidraw4`,
-  readable via the udev rules) settle such questions.
+  The standard-RT binary patch in `firmwares/2304-v309/patch/` implements true Standard Rapid Trigger at the firmware layer:
+  - Intercepts `rt_eval_per_key` (`0x08001FE8`) and disarms the key whenever switch depth rises above the actuation threshold (`d < actuation`).
+  - Actuation and release points can be configured normally and similarly at any desired depth (e.g., 0.5 mm actuation, 0.5 mm release, 0.2 mm sensitivity) through either the CLI (`akko set-rt standard <act> <sens> [rel]`) or the official MonsGeek web app.
+  - The patch also exposes a runtime flavour switch (`0x1F`/`0x9F`): `akko rt-flavour traditional` (standard RT) or `akko rt-flavour continuous` (stock CRT).
 
   **Getting the firmware.** The image the vendor serves is **DEFLATE-compressed,
   not encrypted** (49,431 -> 124,668 bytes; an earlier note here calling it
