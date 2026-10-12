@@ -182,6 +182,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 commands::triggers::rt_flavour(kb, mode.as_deref())
             })?;
         }
+        Some(Commands::Turbo { mode }) => {
+            commands::with_keyboard_on_profile(&ctx, |kb| {
+                commands::triggers::turbo(kb, mode.as_deref())
+            })?;
+        }
+        Some(Commands::Priority { preset }) => {
+            commands::with_keyboard_on_profile(&ctx, |kb| {
+                commands::triggers::priority(kb, preset.as_deref())
+            })?;
+        }
         Some(Commands::SetRelease { mm }) => {
             commands::with_keyboard_on_profile(&ctx, |kb| commands::triggers::set_release(kb, mm))?;
         }

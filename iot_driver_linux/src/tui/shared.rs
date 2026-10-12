@@ -270,6 +270,9 @@ pub(crate) struct LoadingStates {
     pub patch_info: LoadState,
     pub dongle_patch_info: LoadState,
     pub firmware_check: LoadState, // server firmware version check
+    pub turbo_mode: LoadState,     // CAP_TURBO firmware extension
+    pub rt_flavour: LoadState,     // CAP_STANDARD_RT firmware extension
+    pub priority_scan: LoadState,  // CAP_PRIORITY_SCAN firmware extension
     // Other tabs
     pub triggers: LoadState,    // tab 3
     pub options: LoadState,     // tab 4
@@ -293,6 +296,9 @@ pub(crate) enum AsyncResult {
     PatchInfo(Result<PatchInfoData, String>),
     DonglePatchInfo(Result<PatchInfoData, String>),
     FirmwareCheck(FirmwareCheckResult),
+    TurboMode(Result<u8, String>),
+    RtFlavour(Result<u8, String>),
+    PriorityScan(Result<u8, String>),
     // Other tab results
     Triggers(Result<TriggerSettings, String>),
     Options(Result<KbOptions, String>),

@@ -2,7 +2,7 @@
 """
 Hook configuration for FUN60 Pro (dev_id 2304, firmware v309) standard-RT patch.
 
-Goal: implement true "Standard" (Wooting-style) Rapid Trigger with runtime flavor
+Goal: implement true traditional / standard Rapid Trigger with runtime flavor
 switching and patch discovery.
 
 Hooks:
@@ -46,6 +46,13 @@ HOOKS = [
         handler="handle_vendor_cmd",
         mode="filter",
         displace=4,              # stmdb sp!,{r4-r10,lr} — 4-byte Thumb2, safe
+    ),
+    Hook(
+        name="matrix_scan",
+        target=0x08005774,       # matrix_scan
+        handler="handle_matrix_scan",
+        mode="filter",
+        displace=4,              # stmdb sp!,{r4-r10,fp,ip,lr} — 4-byte Thumb2, safe
     ),
 ]
 

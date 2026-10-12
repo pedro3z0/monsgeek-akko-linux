@@ -40,6 +40,14 @@ impl PatchInfo {
     pub fn has_anim_engine(&self) -> bool {
         self.capabilities & 0x40 != 0
     }
+
+    pub fn has_turbo(&self) -> bool {
+        self.capabilities & (1 << 9) != 0
+    }
+
+    pub fn has_priority_scan(&self) -> bool {
+        self.capabilities & (1 << 10) != 0
+    }
 }
 
 /// Status of a single animation definition slot.
@@ -122,6 +130,19 @@ const MAGNETISM_SETTLE_MS: u64 = 250;
 /// the GET only echoes the opcode and reads back as 0.
 pub const RT_FLAVOUR_SET: u8 = 0x1F;
 pub const RT_FLAVOUR_GET: u8 = 0x9F;
+
+/// Turbo mode opcodes (firmware extension, orthogonal to priority scan)
+/// 0x20 SET_TURBO: 0 = off (normal scan + RGB), 1 = on (zero-jitter tight loop)
+/// 0xA0 GET_TURBO: reads current turbo mode (0/1)
+pub const TURBO_MODE_SET: u8 = 0x20;
+pub const TURBO_MODE_GET: u8 = 0xA0;
+
+/// Priority scan opcodes (firmware extension)
+/// 0x21 SET_PRIORITY_MASK: mode byte (0=off, 1=FPS/WASD, 2=MOBA, 0xFF=custom) + 8-byte LE mask
+/// 0xA1 GET_PRIORITY_MASK: reads mode byte + 8-byte LE active mask
+pub const PRIORITY_MASK_SET: u8 = 0x21;
+pub const PRIORITY_MASK_GET: u8 = 0xA1;
+
 
 /// High-level keyboard interface using any transport
 ///
@@ -1363,6 +1384,37 @@ impl KeyboardInterface {
         Ok(())
     }
 
+    /// Send a raw `SET_LEDPARAM` packet with an explicit `option` byte.
+    ///
+    /// This bypasses the `DAZZLE_OFF (0x08)` / `DAZZLE_ON (0x07)` constants that all
+    /// other helpers force into the option field.  Use this when `option = 0x00` is
+    /// required — for example, blanking LEDs before entering Turbo mode: sending
+    /// `option=0x00` with `brightness=0, RGB=(0,0,0)` reliably cuts all PWM output,
+    /// whereas `DAZZLE_OFF=0x08` can trigger a cyan palette fallback on this firmware.
+    pub fn set_led_raw_option(
+        &self,
+        mode: u8,
+        brightness: u8,
+        speed: u8,
+        r: u8,
+        g: u8,
+        b: u8,
+        option: u8,
+    ) -> Result<(), KeyboardError> {
+        let data = [
+            mode,
+            led::SPEED_MAX - speed.min(led::SPEED_MAX),
+            brightness.min(led::BRIGHTNESS_MAX),
+            option,
+            r,
+            g,
+            b,
+        ];
+        self.transport
+            .send_command(cmd::SET_LEDPARAM, &data, ChecksumType::Bit8)?;
+        Ok(())
+    }
+
     /// Select a music-visualizer LED mode (MusicBars / MusicPatterns) with a
     /// style variant and color choice.
     ///
@@ -1568,6 +1620,77 @@ impl KeyboardInterface {
         let data = [if continuous { 1u8 } else { 0u8 }];
         self.transport
             .send_command(RT_FLAVOUR_SET, &data, ChecksumType::Bit7)?;
+        Ok(())
+    }
+
+    /// Read the current Turbo mode: `0` = off (normal scan + RGB), `1` = on (zero-jitter).
+    ///
+    /// Turbo and priority scan are orthogonal: either, both, or neither may be
+    /// active. Values outside 0/1 are rejected so a stale mode-2 can never sneak
+    /// back in through the old combined meaning.
+    pub fn get_turbo_mode(&self) -> Result<u8, KeyboardError> {
+        let resp = self
+            .transport
+            .query_command(TURBO_MODE_GET, &[], ChecksumType::Bit7)?;
+        match resp.get(1).copied().unwrap_or(0) {
+            0 | 1 => Ok(resp[1]),
+            other => Err(KeyboardError::UnexpectedResponse(format!(
+                "turbo mode out of range: {other}"
+            ))),
+        }
+    }
+
+    /// Set Turbo mode: `0` = off, `1` = on (zero-jitter tight loop).
+    pub fn set_turbo_mode(&self, mode: u8) -> Result<(), KeyboardError> {
+        if mode > 1 {
+            return Err(KeyboardError::InvalidParameter(format!(
+                "turbo mode must be 0 (off) or 1 (on), got {mode} — use the priority command for scan clusters"
+            )));
+        }
+        let data = [mode];
+        self.transport
+            .send_command(TURBO_MODE_SET, &data, ChecksumType::Bit7)?;
+        Ok(())
+    }
+
+    // === Priority Scan (firmware extension) ===
+
+    /// Read the current priority scan state.
+    ///
+    /// Returns `(mode, mask)` where `mode` is:
+    /// - `0` = off (full matrix every pass)
+    /// - `1` = FPS/WASD preset
+    /// - `2` = MOBA preset
+    /// - `0xFF` = custom 64-bit mask
+    ///
+    /// `mask` is the active 64-bit key bitmask (little-endian).
+    pub fn get_priority_mask(&self) -> Result<(u8, u64), KeyboardError> {
+        let resp = self
+            .transport
+            .query_command(PRIORITY_MASK_GET, &[], ChecksumType::Bit7)?;
+        // resp[0] = echo cmd, resp[1] = mode, resp[2..9] = 8-byte LE mask
+        let mode = resp.get(1).copied().unwrap_or(0);
+        let mut mask = 0u64;
+        for i in 0..8 {
+            mask |= (resp.get(2 + i).copied().unwrap_or(0) as u64) << (i * 8);
+        }
+        Ok((mode, mask))
+    }
+
+    /// Set priority scan mode.
+    ///
+    /// - `mode = 0`: off — restore full stock matrix scan
+    /// - `mode = 1`: FPS/WASD preset (Shift, Ctrl, Q,A,W,S,E,D,R,F,Space)
+    /// - `mode = 2`: MOBA preset (1-4, Q,W,E,R,D,F,B,Space)
+    /// - `mode = 0xFF`: custom — `mask` encodes which of the 64 key positions to prioritise
+    pub fn set_priority_mask(&self, mode: u8, mask: u64) -> Result<(), KeyboardError> {
+        let mut data = [0u8; 9];
+        data[0] = mode;
+        for i in 0..8 {
+            data[1 + i] = ((mask >> (i * 8)) & 0xFF) as u8;
+        }
+        self.transport
+            .send_command(PRIORITY_MASK_SET, &data, ChecksumType::Bit7)?;
         Ok(())
     }
 

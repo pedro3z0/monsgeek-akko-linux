@@ -269,6 +269,34 @@ pub enum Commands {
         mode: Option<String>,
     },
 
+    /// Get or set competitive Turbo Mode (pure on/off zero-jitter toggle):
+    ///   "off" (0) - Standard scan rate with full RGB lighting and animations
+    ///   "on" (1)  - Zero-jitter tight scan loop, background tick suppressed
+    /// Priority scan is a separate orthogonal control (see `priority`).
+    /// With no argument it reads the current setting.
+    #[command(visible_aliases = ["turbomode", "turbo-mode", "tachyon"])]
+    Turbo {
+        /// "off" | "on" (omit to read)
+        mode: Option<String>,
+    },
+
+    /// Get or set Priority Scan preset (firmware extension — requires CAP_PRIORITY_SCAN patch).
+    ///
+    /// Priority scan interleaves 3 high-rate passes on the selected key cluster for every
+    /// 1 full-matrix pass, boosting the effective scan frequency on movement keys to ~38 kHz
+    /// while still sampling all keys each round.
+    ///
+    ///   "off"       - Full matrix every pass (stock behaviour)
+    ///   "fps"       - FPS/WASD cluster (LShift, LCtrl, Q A W S E D R F Space)
+    ///   "moba"      - MOBA cluster (1-4, Q W E R D F B Space)
+    ///
+    /// With no argument it reads the current setting.
+    #[command(visible_aliases = ["prio", "priority-scan", "set-priority"])]
+    Priority {
+        /// "off" | "fps" | "wasd" | "moba" (omit to read)
+        preset: Option<String>,
+    },
+
     /// Set release point for all keys
     #[command(visible_alias = "srl")]
     SetRelease {

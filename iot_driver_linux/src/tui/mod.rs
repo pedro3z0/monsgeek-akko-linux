@@ -117,6 +117,12 @@ struct App {
     depth_last_update: Vec<Instant>,          // Last update time per key (for stale detection)
     // Patch info (custom firmware capabilities)
     patch_info: Option<PatchInfoData>,
+    // Current turbo mode (None = not loaded / not supported, Some(0/1))
+    turbo_mode: Option<u8>,
+    // Current RT flavour (None = not loaded / not supported, Some(0=traditional, 1=continuous))
+    rt_flavour: Option<u8>,
+    // Current Priority scan preset (None = not loaded / not supported, Some(0=off, 1=fps, 2=moba))
+    priority_scan: Option<u8>,
     // Dongle patch info (custom dongle firmware capabilities)
     dongle_patch_info: Option<PatchInfoData>,
     // Dongle info (for 2.4GHz dongle)
@@ -235,6 +241,9 @@ impl App {
             depth_last_update: Vec::new(),
             // Patch info
             patch_info: None,
+            turbo_mode: None,
+            rt_flavour: None,
+            priority_scan: None,
             dongle_patch_info: None,
             // Dongle info
             dongle_info: None,
@@ -667,6 +676,9 @@ impl App {
                 self.info = FirmwareSettings::default();
                 self.triggers = None;
                 self.patch_info = None;
+                self.turbo_mode = None;
+                self.rt_flavour = None;
+                self.priority_scan = None;
                 self.dongle_patch_info = None;
                 self.firmware_check = None;
                 self.anim_snapshot = None;
@@ -840,6 +852,30 @@ impl App {
                 self.firmware_check = Some(result.clone());
                 self.loading.firmware_check = LoadState::Loaded;
                 self.status_msg = result.message;
+            }
+            AsyncResult::TurboMode(Ok(val)) => {
+                self.turbo_mode = Some(val);
+                self.loading.turbo_mode = LoadState::Loaded;
+            }
+            AsyncResult::TurboMode(Err(_)) => {
+                // Stock firmware returns 0 (or errors); treat as unsupported / off
+                self.turbo_mode = Some(0);
+                self.loading.turbo_mode = LoadState::Loaded;
+            }
+            AsyncResult::RtFlavour(Ok(val)) => {
+                self.rt_flavour = Some(val);
+                self.loading.rt_flavour = LoadState::Loaded;
+            }
+            AsyncResult::RtFlavour(Err(_)) => {
+                self.loading.rt_flavour = LoadState::Loaded;
+            }
+            AsyncResult::PriorityScan(Ok(val)) => {
+                self.priority_scan = Some(val);
+                self.loading.priority_scan = LoadState::Loaded;
+            }
+            AsyncResult::PriorityScan(Err(_)) => {
+                self.priority_scan = Some(0);
+                self.loading.priority_scan = LoadState::Loaded;
             }
             AsyncResult::Triggers(Ok(triggers)) => {
                 self.triggers = Some(triggers);
@@ -1450,7 +1486,19 @@ pub async fn run(device_selector: Option<String>) -> io::Result<()> {
                                     InfoTag::FnLayer => { if let Some(ref opts) = app.options.clone() { app.set_fn_layer(FN_LAYER_SPINNER.decrement_u8(opts.fn_layer, coarse)); } }
                                     InfoTag::WasdSwap => app.toggle_wasd_swap(),
                                     InfoTag::AntiMistouch => app.toggle_anti_mistouch(),
+                                    InfoTag::RtFlavour => {
+                                        let cur = app.rt_flavour.unwrap_or(0);
+                                        app.set_rt_flavour_tui(1 - cur);
+                                    },
                                     InfoTag::RtStability => { if let Some(ref opts) = app.options.clone() { app.set_rt_stability(RT_STABILITY_SPINNER.decrement_u8(opts.rt_stability, coarse)); } }
+                                    InfoTag::TurboMode => {
+                                        let cur = app.turbo_mode.unwrap_or(0);
+                                        app.set_turbo_mode_tui(1 - cur);
+                                    }
+                                    InfoTag::PriorityScan => {
+                                        let cur = app.priority_scan.unwrap_or(0);
+                                        app.set_priority_scan_tui((cur + 2) % 3);
+                                    }
                                     InfoTag::SleepIdleBt => { let step = if coarse { SLEEP_TIME_SPINNER.step_coarse } else { SLEEP_TIME_SPINNER.step } as i32; app.update_sleep_time(SleepField::IdleBt, -step); }
                                     InfoTag::SleepIdle24g => { let step = if coarse { SLEEP_TIME_SPINNER.step_coarse } else { SLEEP_TIME_SPINNER.step } as i32; app.update_sleep_time(SleepField::Idle24g, -step); }
                                     InfoTag::SleepDeepBt => { let step = if coarse { SLEEP_TIME_SPINNER.step_coarse } else { SLEEP_TIME_SPINNER.step } as i32; app.update_sleep_time(SleepField::DeepBt, -step); }
@@ -1518,7 +1566,19 @@ pub async fn run(device_selector: Option<String>) -> io::Result<()> {
                                     InfoTag::FnLayer => { if let Some(ref opts) = app.options.clone() { app.set_fn_layer(FN_LAYER_SPINNER.increment_u8(opts.fn_layer, coarse)); } }
                                     InfoTag::WasdSwap => app.toggle_wasd_swap(),
                                     InfoTag::AntiMistouch => app.toggle_anti_mistouch(),
+                                    InfoTag::RtFlavour => {
+                                        let cur = app.rt_flavour.unwrap_or(0);
+                                        app.set_rt_flavour_tui(1 - cur);
+                                    },
                                     InfoTag::RtStability => { if let Some(ref opts) = app.options.clone() { app.set_rt_stability(RT_STABILITY_SPINNER.increment_u8(opts.rt_stability, coarse)); } }
+                                    InfoTag::TurboMode => {
+                                        let cur = app.turbo_mode.unwrap_or(0);
+                                        app.set_turbo_mode_tui(1 - cur);
+                                    }
+                                    InfoTag::PriorityScan => {
+                                        let cur = app.priority_scan.unwrap_or(0);
+                                        app.set_priority_scan_tui((cur + 1) % 3);
+                                    }
                                     InfoTag::SleepIdleBt => { let step = if coarse { SLEEP_TIME_SPINNER.step_coarse } else { SLEEP_TIME_SPINNER.step } as i32; app.update_sleep_time(SleepField::IdleBt, step); }
                                     InfoTag::SleepIdle24g => { let step = if coarse { SLEEP_TIME_SPINNER.step_coarse } else { SLEEP_TIME_SPINNER.step } as i32; app.update_sleep_time(SleepField::Idle24g, step); }
                                     InfoTag::SleepDeepBt => { let step = if coarse { SLEEP_TIME_SPINNER.step_coarse } else { SLEEP_TIME_SPINNER.step } as i32; app.update_sleep_time(SleepField::DeepBt, step); }

@@ -132,7 +132,8 @@ pub fn set_led(
 ) -> CommandResult {
     let is_off = mode.eq_ignore_ascii_case("off") || mode == "0";
     let (mode_num, brightness, r, g, b) = if is_off {
-        (0, 0, 0, 0, 0)
+        // Mode 0 is not in the firmware table; true 'off' is Constant (mode 1) with brightness 0
+        (1, 0, 0, 0, 0)
     } else {
         (
             cmd::LedMode::parse(mode)

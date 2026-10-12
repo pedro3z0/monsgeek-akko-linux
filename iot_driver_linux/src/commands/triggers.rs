@@ -919,6 +919,153 @@ pub fn rt_flavour(keyboard: &KeyboardInterface, mode: Option<&str>) -> CommandRe
     Ok(())
 }
 
+/// Query or configure competitive Turbo Mode (pure on/off).
+///
+/// Turbo and priority scan are orthogonal and compose freely:
+/// - `off` (0): Stock matrix scanning rate with RGB animations and normal housekeeping.
+/// - `on` (1): Zero-jitter tight scan loop; main loop background housekeeping tick is suppressed.
+///
+/// Priority clusters (`fps`/`moba`/custom) are controlled separately via
+/// [`priority`]; turbo does not imply any scan cluster.
+pub fn turbo(keyboard: &KeyboardInterface, mode: Option<&str>) -> CommandResult {
+    let patch = keyboard.get_patch_info().ok().flatten();
+    let has_turbo = patch.as_ref().map(|p| p.has_turbo()).unwrap_or(false);
+
+    match mode {
+        None => {
+            if !has_turbo {
+                println!(
+                    "Turbo mode: not supported (requires custom firmware patch with CAP_TURBO)"
+                );
+                return Ok(());
+            }
+            match keyboard.get_turbo_mode() {
+                Ok(0) => println!("Turbo mode: off (normal scan rate + full RGB)"),
+                Ok(1) => println!("Turbo mode: on (zero-jitter tight loop, tick suppressed)"),
+                Ok(other) => println!("Turbo mode: unknown ({other})"),
+                Err(e) => return Err(format!("Failed to read turbo mode: {e}").into()),
+            }
+        }
+        Some(m) => {
+            if !has_turbo {
+                return Err(
+                    "Turbo mode is not supported on this firmware (requires CAP_TURBO patch)".into(),
+                );
+            }
+            let val = match m.to_lowercase().as_str() {
+                "0" | "off" | "disable" | "disabled" | "normal" => 0,
+                "1" | "on" | "turbo" | "enable" | "enabled" => 1,
+                other => {
+                    return Err(format!(
+                        "unknown turbo mode {other:?} — use 'off' (0) or 'on' (1); priority clusters live under the 'priority' command"
+                    )
+                    .into());
+                }
+            };
+            // Build LED off/on params using raw option=0x00.
+            // DAZZLE_OFF=0x08 (sent by set_led/set_led_params when dazzle=false) triggers
+            // a cyan palette fallback on this firmware when brightness=0.
+            // option=0x00 cuts all PWM output cleanly.
+
+            if val != 0 {
+                // Blank before enabling turbo so hardware latches black before tick suppression.
+                let _ = keyboard.set_led_raw_option(1, 0, 0, 0, 0, 0, 0x00);
+                // Allow the firmware main loop one full frame cycle (~2-5ms minimum, 60ms safe)
+                // to push the black frame through the DMA / WS2812 shift register chain
+                // before tick suppression halts the LED pipeline.
+                std::thread::sleep(std::time::Duration::from_millis(60));
+            }
+
+            keyboard
+                .set_turbo_mode(val)
+                .map_err(|e| format!("Failed to set turbo mode: {e}"))?;
+
+            if val == 0 {
+                // Give main loop tick a moment to resume before commanding LED restore
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                // Restore standard white lighting once turbo is off
+                let _ = keyboard.set_led_raw_option(1, 4, 2, 255, 255, 255, 0x00);
+            }
+
+            let now = keyboard.get_turbo_mode().unwrap_or(u8::MAX);
+            println!(
+                "Turbo mode set to {}",
+                match val {
+                    0 => "off (normal scan rate + full RGB)",
+                    1 => "on (zero-jitter tight loop)",
+                    _ => "unknown",
+                }
+            );
+            if now != val {
+                println!("  warning: read back {now}, expected {val}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Query or configure Priority Scan preset.
+///
+/// Priority scan interleaves 3 high-rate passes on the selected key cluster for every
+/// 1 full-matrix pass (~38 kHz effective scan on those keys, ~9.5 kHz for the rest).
+///
+/// Presets:
+/// - `off` (0): full matrix every pass (stock behaviour)
+/// - `fps` / `wasd` (1): FPS/WASD cluster (LShift, LCtrl, Q A W S E D R F Space)
+/// - `moba` (2): MOBA cluster (1-4, Q W E R D F B Space)
+pub fn priority(keyboard: &KeyboardInterface, preset: Option<&str>) -> CommandResult {
+    let patch = keyboard.get_patch_info().ok().flatten();
+    let has_priority = patch.as_ref().map(|p| p.has_priority_scan()).unwrap_or(false);
+
+    match preset {
+        None => {
+            if !has_priority {
+                println!(
+                    "Priority scan: not supported (requires custom firmware patch with CAP_PRIORITY_SCAN)"
+                );
+                return Ok(());
+            }
+            match keyboard.get_priority_mask() {
+                Ok((0, _)) => println!("Priority scan: off (full matrix every pass)"),
+                Ok((1, _)) => println!("Priority scan: fps — FPS/WASD cluster (LShift, LCtrl, Q A W S E D R F Space)"),
+                Ok((2, _)) => println!("Priority scan: moba — MOBA cluster (1-4, Q W E R D F B Space)"),
+                Ok((0xFF, mask)) => println!("Priority scan: custom (mask: 0x{mask:016X})"),
+                Ok((other, _)) => println!("Priority scan: unknown preset ({other})"),
+                Err(e) => return Err(format!("Failed to read priority mask: {e}").into()),
+            }
+        }
+        Some(p) => {
+            if !has_priority {
+                return Err(
+                    "Priority scan is not supported on this firmware (requires CAP_PRIORITY_SCAN patch)"
+                        .into(),
+                );
+            }
+            let (mode, label) = match p.to_lowercase().as_str() {
+                "0" | "off" | "disable" | "disabled" | "none" => (0u8, "off (full matrix)"),
+                "1" | "fps" | "wasd" | "gaming" => (1u8, "fps — FPS/WASD cluster"),
+                "2" | "moba" => (2u8, "moba — MOBA cluster"),
+                other => {
+                    return Err(format!(
+                        "unknown priority preset {other:?} — use 'off', 'fps' (or 'wasd'), or 'moba'"
+                    )
+                    .into());
+                }
+            };
+            keyboard
+                .set_priority_mask(mode, 0)
+                .map_err(|e| format!("Failed to set priority mask: {e}"))?;
+
+            let now = keyboard.get_priority_mask().map(|(m, _)| m).unwrap_or(u8::MAX);
+            println!("Priority scan set to {label}");
+            if now != mode {
+                println!("  warning: read back {now}, expected {mode}");
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Set release point for all keys
 pub fn set_release(keyboard: &KeyboardInterface, mm: f32) -> CommandResult {
     let precision = keyboard.get_precision().unwrap_or_default();

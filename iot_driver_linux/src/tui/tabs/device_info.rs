@@ -57,7 +57,10 @@ pub(in crate::tui) enum InfoTag {
     FnLayer,
     WasdSwap,
     AntiMistouch,
+    RtFlavour,
     RtStability,
+    TurboMode,
+    PriorityScan,
     SleepIdleBt,
     SleepIdle24g,
     SleepDeepBt,
@@ -287,6 +290,40 @@ impl App {
                     Err(e) => Err(e.to_string()),
                 };
                 tx.send(AsyncResult::DonglePatchInfo(result));
+            });
+        }
+
+        // Turbo mode (CAP_TURBO firmware extension): always attempt query;
+        // if the firmware doesn't support it the response byte just reads back 0.
+        {
+            let kb = keyboard.clone();
+            let tx = tx.clone();
+            self.loading.turbo_mode = LoadState::Loading;
+            tokio::spawn(async move {
+                let result = kb.get_turbo_mode().map_err(|e| e.to_string());
+                tx.send(AsyncResult::TurboMode(result));
+            });
+        }
+
+        // RT flavour (CAP_STANDARD_RT firmware extension)
+        {
+            let kb = keyboard.clone();
+            let tx = tx.clone();
+            self.loading.rt_flavour = LoadState::Loading;
+            tokio::spawn(async move {
+                let result = kb.get_rt_flavour().map_err(|e| e.to_string());
+                tx.send(AsyncResult::RtFlavour(result));
+            });
+        }
+
+        // Priority scan (CAP_PRIORITY_SCAN firmware extension)
+        {
+            let kb = keyboard.clone();
+            let tx = tx.clone();
+            self.loading.priority_scan = LoadState::Loading;
+            tokio::spawn(async move {
+                let result = kb.get_priority_mask().map(|(m, _)| m).map_err(|e| e.to_string());
+                tx.send(AsyncResult::PriorityScan(result));
             });
         }
     }
@@ -722,6 +759,108 @@ impl App {
         );
     }
 
+    /// Set turbo mode (0 = off, 1 = on / zero-jitter tight loop).
+    ///
+    /// Turbo and priority scan are orthogonal: this never touches the priority
+    /// mask. Only available when the patched firmware advertises CAP_TURBO. Blanks the
+    /// LED when entering turbo (option=0x00 avoids the cyan fallback artifact) and
+    /// restores solid white when returning to normal.
+    pub(in crate::tui) fn set_turbo_mode_tui(&mut self, val: u8) {
+        let has_turbo = self
+            .patch_info
+            .as_ref()
+            .map(|p| p.capabilities.contains(&"turbo"))
+            .unwrap_or(false);
+        if !has_turbo {
+            self.status_msg = "Turbo: not supported (requires CAP_TURBO firmware patch)".into();
+            return;
+        }
+        if let Some(ref keyboard) = self.keyboard {
+            let kb = keyboard.clone();
+            self.turbo_mode = Some(val);
+            self.status_msg = format!(
+                "Turbo: {}",
+                match val {
+                    0 => "off (normal scan rate + full RGB)",
+                    1 => "on (zero-jitter tight loop)",
+                    _ => "?",
+                }
+            );
+
+            tokio::spawn(async move {
+                if val != 0 {
+                    let _ = kb.set_led_raw_option(1, 0, 0, 0, 0, 0, 0x00);
+                    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                }
+                let _ = kb.set_turbo_mode(val);
+                if val == 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                    let _ = kb.set_led_raw_option(1, 4, 2, 255, 255, 255, 0x00);
+                }
+            });
+        }
+    }
+
+    /// Set Rapid Trigger flavour (0 = traditional / standard RT, 1 = continuous / stock CRT).
+    pub(in crate::tui) fn set_rt_flavour_tui(&mut self, val: u8) {
+        let has_standard_rt = self
+            .patch_info
+            .as_ref()
+            .map(|p| p.capabilities.contains(&"standard_rt"))
+            .unwrap_or(false);
+        if !has_standard_rt {
+            self.status_msg = "RT flavour: not supported (requires standard_rt firmware patch)".into();
+            return;
+        }
+        if let Some(ref keyboard) = self.keyboard {
+            let continuous = val != 0;
+            match keyboard.set_rt_flavour(continuous) {
+                Ok(()) => {
+                    self.rt_flavour = Some(val);
+                    self.status_msg = format!(
+                        "RT Flavour: {}",
+                        if continuous { "Continuous (Stock CRT)" } else { "Traditional (Standard RT)" }
+                    );
+                }
+                Err(e) => {
+                    self.status_msg = format!("RT flavour set failed: {e}");
+                }
+            }
+        }
+    }
+
+    /// Set Priority Scan preset in the TUI (cycles: off → fps → moba → off).
+    pub(in crate::tui) fn set_priority_scan_tui(&mut self, val: u8) {
+        let has_priority = self
+            .patch_info
+            .as_ref()
+            .map(|p| p.capabilities.contains(&"priority_scan"))
+            .unwrap_or(false);
+        if !has_priority {
+            self.status_msg = "Priority scan: not supported (requires CAP_PRIORITY_SCAN firmware patch)".into();
+            return;
+        }
+        if let Some(ref keyboard) = self.keyboard {
+            match keyboard.set_priority_mask(val, 0) {
+                Ok(()) => {
+                    self.priority_scan = Some(val);
+                    self.status_msg = format!(
+                        "Priority scan: {}",
+                        match val {
+                            0 => "off (full matrix)",
+                            1 => "fps — FPS/WASD cluster",
+                            2 => "moba — MOBA cluster",
+                            _ => "?",
+                        }
+                    );
+                }
+                Err(e) => {
+                    self.status_msg = format!("Priority scan set failed: {e}");
+                }
+            }
+        }
+    }
+
     /// Update a single sleep time value with validation (deep >= idle)
     pub(in crate::tui) fn update_sleep_time(&mut self, field: SleepField, delta: i32) {
         let Some(ref mut opts) = self.options else {
@@ -1108,6 +1247,35 @@ pub(in crate::tui) fn render_device_info(f: &mut Frame, app: &mut App, area: Rec
                 ),
             ])),
         ));
+
+        // RT Flavour — shown when standard_rt capability is present
+        let has_standard_rt = app
+            .patch_info
+            .as_ref()
+            .map(|p| p.capabilities.contains(&"standard_rt"))
+            .unwrap_or(false);
+        if has_standard_rt {
+            let (label, color) = match app.rt_flavour {
+                None => (
+                    match loading.rt_flavour {
+                        LoadState::Loading => format!("< {} >", spinner),
+                        _ => "< ? >".to_string(),
+                    },
+                    Color::Yellow,
+                ),
+                Some(0) => ("< Traditional (Standard RT) >".to_string(), Color::Cyan),
+                Some(1) => ("< Continuous (Stock CRT) >".to_string(), Color::Yellow),
+                Some(n) => (format!("< {n} >"), Color::DarkGray),
+            };
+            items.push((
+                InfoTag::RtFlavour,
+                ListItem::new(Line::from(vec![
+                    Span::raw("RT Flavour:     "),
+                    Span::styled(label, Style::default().fg(color)),
+                ])),
+            ));
+        }
+
         items.push((
             InfoTag::RtStability,
             ListItem::new(Line::from(vec![
@@ -1121,6 +1289,64 @@ pub(in crate::tui) fn render_device_info(f: &mut Frame, app: &mut App, area: Rec
                 ),
             ])),
         ));
+
+        // Turbo Mode — only shown when CAP_TURBO firmware patch is active
+        let has_turbo = app
+            .patch_info
+            .as_ref()
+            .map(|p| p.capabilities.contains(&"turbo"))
+            .unwrap_or(false);
+        if has_turbo {
+            let (label, color) = match app.turbo_mode {
+                None => (
+                    match loading.turbo_mode {
+                        LoadState::Loading => format!("< {} >", spinner),
+                        _ => "< ? >".to_string(),
+                    },
+                    Color::Yellow,
+                ),
+                Some(0) => ("< OFF >".to_string(), Color::Green),
+                Some(1) => ("< ON (zero-jitter) >".to_string(), Color::Red),
+                Some(n) => (format!("< {n} >"), Color::DarkGray),
+            };
+            items.push((
+                InfoTag::TurboMode,
+                ListItem::new(Line::from(vec![
+                    Span::raw("Turbo Mode:     "),
+                    Span::styled(label, Style::default().fg(color)),
+                ])),
+            ));
+        }
+
+        // Priority Scan — only shown when CAP_PRIORITY_SCAN firmware patch is active
+        let has_priority = app
+            .patch_info
+            .as_ref()
+            .map(|p| p.capabilities.contains(&"priority_scan"))
+            .unwrap_or(false);
+        if has_priority {
+            let (label, color) = match app.priority_scan {
+                None => (
+                    match loading.priority_scan {
+                        LoadState::Loading => format!("< {} >", spinner),
+                        _ => "< ? >".to_string(),
+                    },
+                    Color::Yellow,
+                ),
+                Some(0) => ("< OFF >".to_string(), Color::Green),
+                Some(1) => ("< FPS (WASD) >".to_string(), Color::Cyan),
+                Some(2) => ("< MOBA >".to_string(), Color::Blue),
+                Some(n) => (format!("< {n} >"), Color::DarkGray),
+            };
+            items.push((
+                InfoTag::PriorityScan,
+                ListItem::new(Line::from(vec![
+                    Span::raw("Priority Scan:  "),
+                    Span::styled(label, Style::default().fg(color)),
+                ])),
+            ));
+        }
+
         items.push((
             InfoTag::SleepIdleBt,
             ListItem::new(Line::from(vec![

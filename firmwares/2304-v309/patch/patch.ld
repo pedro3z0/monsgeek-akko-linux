@@ -4,7 +4,7 @@
  * We reserve 16KB for patch code + 4KB SRAM for BSS/state. */
 MEMORY {
     PATCH     (rx)  : ORIGIN = 0x0801e800, LENGTH = 16384
-    PATCH_SRAM (rw) : ORIGIN = 0x2000e000, LENGTH = 4096
+    PATCH_SRAM (rw) : ORIGIN = 0x20009800, LENGTH = 4096
 }
 SECTIONS {
     .text : {
