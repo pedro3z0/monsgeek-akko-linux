@@ -130,9 +130,20 @@ pub fn set_led(
     g: u8,
     b: u8,
 ) -> CommandResult {
-    let mode_num = cmd::LedMode::parse(mode)
-        .map(|m| m.as_u8())
-        .unwrap_or_else(|| mode.parse().unwrap_or(1));
+    let is_off = mode.eq_ignore_ascii_case("off") || mode == "0";
+    let (mode_num, brightness, r, g, b) = if is_off {
+        (0, 0, 0, 0, 0)
+    } else {
+        (
+            cmd::LedMode::parse(mode)
+                .map(|m| m.as_u8())
+                .unwrap_or_else(|| mode.parse().unwrap_or(1)),
+            brightness,
+            r,
+            g,
+            b,
+        )
+    };
 
     match keyboard.set_led(mode_num, brightness, speed, r, g, b, false) {
         Ok(_) => println!(
