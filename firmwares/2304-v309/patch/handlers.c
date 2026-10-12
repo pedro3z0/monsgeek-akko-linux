@@ -107,8 +107,21 @@ static uint8_t g_priority_mode;
 static uint64_t g_active_priority_mask;
 
 #define MASK_TABLE_ADDR   0x2000283Eu
+#define MASK_TABLE_ADDR   0x2000283Eu
 #define MASK_TABLE_SIZE   84u
 #define MAIN_LOOP_TICK    ((volatile uint8_t *)0x20000468)
+
+/* Hardware stock skip mask for FUN60 Pro (60-key ANSI in 14x6 matrix, dev_id 2304)
+ * 0 = populated key to scan, 1 = unpopulated socket to skip */
+static const uint8_t g_default_stock_mask[MASK_TABLE_SIZE] = {
+    1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1,
+    1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+    1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,
+    1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+    1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,
+    1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
+    1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0,
+};
 
 static uint8_t g_stock_mask[MASK_TABLE_SIZE];
 static uint8_t g_priority_mask[MASK_TABLE_SIZE];
@@ -147,12 +160,19 @@ static void rebuild_priority_mask(uint64_t mask) {
     }
 }
 
-static void init_turbo_masks(void) {
+static void restore_hw_stock_mask(void) {
     volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
     for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-        g_stock_mask[i] = hw_mask[i];
+        hw_mask[i] = g_stock_mask[i];
+    }
+}
+
+static void init_turbo_masks(void) {
+    for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
+        g_stock_mask[i] = g_default_stock_mask[i];
     }
     rebuild_priority_mask(PRIORITY_MASK_FPS);
+    restore_hw_stock_mask();
     g_masks_initialized = 1;
 }
 
@@ -183,19 +203,13 @@ int handle_matrix_scan(void) {
             }
         } else if (g_scan_pass != 0) {
             /* Restore full stock mask if leaving priority mode */
-            volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
-            for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-                hw_mask[i] = g_stock_mask[i];
-            }
+            restore_hw_stock_mask();
             g_scan_pass = 0;
         }
     } else {
-        /* Turbo is off: priority scan cannot run without zero-jitter loop */
+        /* Turbo is off: ensure full stock mask is active */
         if (g_scan_pass != 0) {
-            volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
-            for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-                hw_mask[i] = g_stock_mask[i];
-            }
+            restore_hw_stock_mask();
             g_scan_pass = 0;
         }
     }
@@ -282,6 +296,10 @@ int handle_vendor_cmd(void) {
          * Request: cmd_buf[3] = mode (0 = off, 1 = on)
          */
         g_turbo_mode = cmd_buf[3] & 1;
+        if (g_turbo_mode == 0) {
+            restore_hw_stock_mask();
+            g_scan_pass = 0;
+        }
         cmd_buf[0]   = 0;  /* mark command handled */
         return 1;          /* intercepted */
     }
@@ -315,6 +333,10 @@ int handle_vendor_cmd(void) {
         g_priority_mode = mode;
         g_active_priority_mask = mask;
         rebuild_priority_mask(mask);
+        if (mode == 0) {
+            restore_hw_stock_mask();
+            g_scan_pass = 0;
+        }
         cmd_buf[0] = 0;   /* mark command handled */
         return 1;         /* intercepted */
     }
