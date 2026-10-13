@@ -1356,46 +1356,48 @@ pub(in crate::tui) fn render_device_info(f: &mut Frame, app: &mut App, area: Rec
             ));
         }
 
-        items.push((
-            InfoTag::SleepIdleBt,
-            ListItem::new(Line::from(vec![
-                Span::raw("BT Idle:        "),
-                Span::styled(
-                    format!("< {} >", SleepTimeSettings::format_duration(opts.idle_bt)),
-                    Style::default().fg(Color::Cyan),
-                ),
-            ])),
-        ));
-        items.push((
-            InfoTag::SleepIdle24g,
-            ListItem::new(Line::from(vec![
-                Span::raw("2.4G Idle:      "),
-                Span::styled(
-                    format!("< {} >", SleepTimeSettings::format_duration(opts.idle_24g)),
-                    Style::default().fg(Color::Cyan),
-                ),
-            ])),
-        ));
-        items.push((
-            InfoTag::SleepDeepBt,
-            ListItem::new(Line::from(vec![
-                Span::raw("BT Deep Sleep:  "),
-                Span::styled(
-                    format!("< {} >", SleepTimeSettings::format_duration(opts.deep_bt)),
-                    Style::default().fg(Color::Green),
-                ),
-            ])),
-        ));
-        items.push((
-            InfoTag::SleepDeep24g,
-            ListItem::new(Line::from(vec![
-                Span::raw("2.4G Deep Sleep:"),
-                Span::styled(
-                    format!("< {} >", SleepTimeSettings::format_duration(opts.deep_24g)),
-                    Style::default().fg(Color::Green),
-                ),
-            ])),
-        ));
+        if app.is_wireless {
+            items.push((
+                InfoTag::SleepIdleBt,
+                ListItem::new(Line::from(vec![
+                    Span::raw("BT Idle:        "),
+                    Span::styled(
+                        format!("< {} >", SleepTimeSettings::format_duration(opts.idle_bt)),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ])),
+            ));
+            items.push((
+                InfoTag::SleepIdle24g,
+                ListItem::new(Line::from(vec![
+                    Span::raw("2.4G Idle:      "),
+                    Span::styled(
+                        format!("< {} >", SleepTimeSettings::format_duration(opts.idle_24g)),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ])),
+            ));
+            items.push((
+                InfoTag::SleepDeepBt,
+                ListItem::new(Line::from(vec![
+                    Span::raw("BT Deep Sleep:  "),
+                    Span::styled(
+                        format!("< {} >", SleepTimeSettings::format_duration(opts.deep_bt)),
+                        Style::default().fg(Color::Green),
+                    ),
+                ])),
+            ));
+            items.push((
+                InfoTag::SleepDeep24g,
+                ListItem::new(Line::from(vec![
+                    Span::raw("2.4G Deep Sleep:"),
+                    Span::styled(
+                        format!("< {} >", SleepTimeSettings::format_duration(opts.deep_24g)),
+                        Style::default().fg(Color::Green),
+                    ),
+                ])),
+            ));
+        }
         items.push((
             InfoTag::OsMode,
             ListItem::new(Line::from(vec![
