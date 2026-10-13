@@ -93,18 +93,9 @@ int handle_rt_eval(uint32_t ctx, uint32_t key_idx) {
 
 /* Turbo Mode state:
  *   0 = Normal (housekeeping and RGB tick active) [DEFAULT]
- *   1 = Turbo / Zero-Jitter (main loop tick locked at 0)
+ *   1 = Turbo / Zero-Jitter (firmware-level RGB blanking & locked tick)
  */
 static uint8_t g_turbo_mode;
-
-/* Priority Scan state:
- *   0 = Off (full matrix scan every pass) [DEFAULT]
- *   1 = FPS / WASD cluster preset (~38 kHz on movement keys)
- *   2 = MOBA cluster preset (QWER, DF, 1-4, B, Space)
- *   0xFF = Custom 64-bit priority mask
- */
-static uint8_t g_priority_mode;
-static uint64_t g_active_priority_mask;
 
 #define MATRIX_CUR_COL    ((volatile uint8_t *)0x20002925)
 

@@ -147,10 +147,24 @@ records means the board streams nothing (change-only); hundreds or thousands
 per second would be a real device stream, and only then does a `--rate`
 comparison mean anything.
 
-**3.5 There is no turbo or scan-mode command.** No such byte exists anywhere in
-the vendor protocol, the KBOPTION payload, the device database or the key-code
-table. The levers that do exist are polling rate, debounce (0x06) and the RT
-stability gate.
+**3.5 Turbo Mode and Hardware Scan Pipeline.** In the *stock* vendor protocol,
+there is no native turbo command — stock levers are limited to polling rate, debounce (0x06),
+and the RT stability gate.
+
+However, in the **MONSMOD** custom firmware patch (`firmwares/2304-v309/patch/`):
+- **Raw ADC fast-path (Patch `0x08005C10`)**: NOPs the 8-sample boxcar and 2-sample EMA filters,
+  reading raw 1-sample ADC conversions directly (~6,000 Hz matrix scan rate, ~170 µs full board sweep).
+- **Turbo Mode (`0x20` SET / `0xA0` GET)**: Natively locks the main loop tick to zero and blanks
+  RGB backlighting at the firmware level (`*0x20005EAC |= (1 << 4)`). This clears the WS2812 frame buffer
+  with `0xC0` and suppresses SPI DMA push overhead, eliminating LED transmission jitter.
+- **Main loop wireless check bypass (Patch `0x0801424A`)**: Bypasses the 25 µs wireless RF sleep checks
+  and dummy function calls on wired keyboards.
+- **Hardware MUX Constraints & Priority Scan Retirement**: The board routes Hall effect sensors through
+  analog multiplexers that require sequential column progression ($0 \to 1 \to \dots \to 13$) with 5 µs
+  settling delays (`0x080133B4`). The MUX hardware primes column $N+1$ at the end of column $N$.
+  Attempts to skip or reorder columns (Priority Scan) desynchronize the physical MUX settling pipeline,
+  causing all even columns (`2, 4, 6, 0, h, k, z, c, b, m`) to drop. As such, Priority Scan was retired
+  in favor of whole-matrix Turbo scanning.
 
 ## 4. Simple settings (all verified)
 

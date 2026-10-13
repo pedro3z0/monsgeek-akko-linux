@@ -12,7 +12,9 @@ Custom firmware patches for the MonsGeek M1 V5 keyboard and its 2.4GHz wireless 
 - **Debug log** — Ring buffer readable over HID for diagnostics (developer use).
 - **RTT telemetry** — SEGGER RTT channel for live battery ADC/charger monitoring over SWD (developer use).
 - **Consumer control fix** — Reroutes encoder consumer data to the correct RF sub-type for dongle mode, and NOPs the stock firmware's premature buffer zeroing so consumer data survives until transmission. See [consumer_report_dongle_misroute](bugs/consumer_report_dongle_misroute.txt).
-- **Depth monitor unlock** — Enables magnetism depth reports on USB and 2.4GHz (stock limits to Bluetooth only, and blocks 8KHz polling rates). See [depth_report_speed_gate_bug](bugs/depth_report_speed_gate_bug.txt).
+- **Standard Rapid Trigger** — Disarms RT immediately when key switch travel rises back above the actuation threshold, matching traditional mechanical feel while preserving rapid release.
+- **Fast scan ADC path** — Bypasses multi-sample boxcar/EMA filtering in firmware for raw 1-sample ADC conversions (~6,000 Hz sweep).
+- **Turbo Mode** — Eliminates main-loop jitter and blanks RGB LEDs at firmware level, suppressing SPI DMA overhead.
 
 ### Dongle patch (MONSDON)
 
@@ -341,8 +343,11 @@ The dongle uses a HID Feature report instead of a vendor command because 0xE7 is
 | 4 | `consumer_redirect` | — | Sub=3 consumer → EP2 (native path) |
 | 5 | `speed_gate_nop` | — | USB speed check NOPd |
 | 6 | `anim_engine` | On-device animation engine (0xEA) | — |
+| 7 | `standard_rt` | Standard Rapid Trigger engine (disarms above actuation point) | — |
+| 8 | `fast_scan` | Raw 1-sample ADC fast path (~6,000 Hz sweep) | — |
+| 9 | `turbo` | Zero-jitter main loop + native firmware LED blanking | — |
 
-Current values: MONSMOD = 0x004F, MONSDON = 0x0031.
+Current values: MONSMOD (M1 V5) = 0x004F, MONSMOD (FUN60 Pro) = 0x0380, MONSDON = 0x0031.
 
 ### Symbol export pipeline
 
