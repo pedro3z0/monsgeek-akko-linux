@@ -106,74 +106,7 @@ static uint8_t g_turbo_mode;
 static uint8_t g_priority_mode;
 static uint64_t g_active_priority_mask;
 
-#define MASK_TABLE_ADDR   0x2000283Eu
-#define MASK_TABLE_SIZE   84u
 #define MATRIX_CUR_COL    ((volatile uint8_t *)0x20002925)
-
-/* Hardware stock skip mask for FUN60 Pro (60-key ANSI in 14x6 matrix, dev_id 2304)
- * 0 = populated key to scan, 1 = unpopulated socket to skip */
-static const uint8_t g_default_stock_mask[MASK_TABLE_SIZE] = {
-    1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1,
-    1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
-    1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,
-    1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-    1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1,
-    1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-    1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0,
-};
-
-static uint8_t g_stock_mask[MASK_TABLE_SIZE];
-static uint8_t g_priority_mask[MASK_TABLE_SIZE];
-static uint8_t g_masks_initialized;
-static uint8_t g_scan_pass;
-
-/* FPS / WASD cluster:
- * 4: Shift_L, 5: Ctrl_L, 8: Q, 9: A, 14: W, 15: S, 20: E, 21: D, 26: R, 27: F, 41: Space
- */
-#define PRIORITY_MASK_FPS  (\
-    (1ULL << 4)  | (1ULL << 5)  | (1ULL << 8)  | (1ULL << 9)  | \
-    (1ULL << 14) | (1ULL << 15) | (1ULL << 20) | (1ULL << 21) | \
-    (1ULL << 26) | (1ULL << 27) | (1ULL << 41) )
-
-/* MOBA cluster:
- * 2: 1, 7: 2, 13: 3, 19: 4, 8: Q, 14: W, 20: E, 26: R, 21: D, 27: F, 33: B, 41: Space
- */
-#define PRIORITY_MASK_MOBA (\
-    (1ULL << 2)  | (1ULL << 7)  | (1ULL << 13) | (1ULL << 19) | \
-    (1ULL << 8)  | (1ULL << 14) | (1ULL << 20) | (1ULL << 26) | \
-    (1ULL << 21) | (1ULL << 27) | (1ULL << 33) | (1ULL << 41) )
-
-static void rebuild_priority_mask(uint64_t mask) {
-    for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-        uint8_t m = g_stock_mask[i];
-        if (m != 0) {
-            /* Unpopulated switch position */
-            g_priority_mask[i] = m;
-        } else if (i < 64 && ((mask & (1ULL << i)) != 0)) {
-            /* Priority key: sample on priority passes */
-            g_priority_mask[i] = 0;
-        } else {
-            /* Non-priority key: skip on fast priority passes */
-            g_priority_mask[i] = 1;
-        }
-    }
-}
-
-static void restore_hw_stock_mask(void) {
-    volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
-    for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-        hw_mask[i] = g_stock_mask[i];
-    }
-}
-
-static void init_turbo_masks(void) {
-    for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-        g_stock_mask[i] = g_default_stock_mask[i];
-    }
-    rebuild_priority_mask(PRIORITY_MASK_FPS);
-    restore_hw_stock_mask();
-    g_masks_initialized = 1;
-}
 
 /* ── Matrix Scan Hook ─────────────────────────────────────────────────────── */
 
@@ -183,36 +116,7 @@ int handle_matrix_scan(void) {
         patch_initialized = 1;
     }
 
-    if (!g_masks_initialized) {
-        init_turbo_masks();
-    }
-
-    if (g_turbo_mode != 0) {
-        if (g_priority_mode != 0) {
-            /* Switch scan pass only at the start of a full sweep (column 0) */
-            if (*MATRIX_CUR_COL == 0) {
-                /* 1:1 interleaved scan: 1 priority sweep, 1 full stock sweep */
-                g_scan_pass = (g_scan_pass + 1) & 1;
-                volatile uint8_t *hw_mask = (volatile uint8_t *)MASK_TABLE_ADDR;
-                const uint8_t *src = (g_scan_pass == 1) ? g_stock_mask : g_priority_mask;
-                for (uint32_t i = 0; i < MASK_TABLE_SIZE; i++) {
-                    hw_mask[i] = src[i];
-                }
-            }
-        } else if (g_scan_pass != 0) {
-            /* Restore full stock mask if leaving priority mode */
-            restore_hw_stock_mask();
-            g_scan_pass = 0;
-        }
-    } else {
-        /* Turbo is off: ensure full stock mask is active */
-        if (g_scan_pass != 0) {
-            restore_hw_stock_mask();
-            g_scan_pass = 0;
-        }
-    }
-
-    return 0;   /* Proceed with matrix_scan */
+    return 0;   /* Proceed with natural high-speed matrix_scan across all columns */
 }
 
 /* ── Vendor Command Hook ─────────────────────────────────────────────────── */
@@ -221,13 +125,11 @@ int handle_matrix_scan(void) {
  *   bit 7: standard_rt
  *   bit 8: fast_scan (raw 1-sample 0.25ms ADC scan)
  *   bit 9: turbo (zero-jitter tight loop)
- *   bit 10: priority_scan (dynamic multi-rate priority scanning)
  */
 #define CAP_STANDARD_RT   (1u << 7)
 #define CAP_FAST_SCAN     (1u << 8)
 #define CAP_TURBO         (1u << 9)
-#define CAP_PRIORITY_SCAN (1u << 10)
-#define CAPABILITIES      (CAP_STANDARD_RT | CAP_FAST_SCAN | CAP_TURBO | CAP_PRIORITY_SCAN)
+#define CAPABILITIES      (CAP_STANDARD_RT | CAP_FAST_SCAN | CAP_TURBO)
 
 int handle_vendor_cmd(void) {
     if (!patch_initialized) {
@@ -251,7 +153,7 @@ int handle_vendor_cmd(void) {
          *   cmd_buf[4] = 0xFE (MAGIC_LO)
          *   cmd_buf[5] = 1    (patch version)
          *   cmd_buf[6] = 0x80 (capabilities lo: bit 7 = standard_rt)
-         *   cmd_buf[7] = 0x07 (capabilities hi: bit 8 = fast_scan, bit 9 = turbo, bit 10 = priority_scan)
+         *   cmd_buf[7] = 0x03 (capabilities hi: bit 8 = fast_scan, bit 9 = turbo)
          *   cmd_buf[8..15] = "MONSMOD\0"
          */
         cmd_buf[3]  = 0xCA;
@@ -289,14 +191,23 @@ int handle_vendor_cmd(void) {
         return 1;         /* intercepted */
     }
 
+#define LED_CONFIG_FLAGS  ((volatile uint8_t *)0x20005EAC)
+#define LED_FLAG_DISABLE  (1u << 4)
+
     case 0x20: {
         /* SET_TURBO (global zero-jitter toggle)
          * Request: cmd_buf[3] = mode (0 = off, 1 = on)
          */
         g_turbo_mode = cmd_buf[3] & 1;
-        if (g_turbo_mode == 0) {
-            restore_hw_stock_mask();
-            g_scan_pass = 0;
+        if (g_turbo_mode != 0) {
+            /* Firmware-level RGB disable: set backlight disable flag (bit 4 of 0x20005EAC).
+             * This immediately blanks the LED frame buffer with 0xC0 (black) and suppresses
+             * SPI DMA transmissions, eliminating all LED latency and jitter.
+             */
+            *LED_CONFIG_FLAGS |= LED_FLAG_DISABLE;
+        } else {
+            /* Restore backlight when Turbo is disabled */
+            *LED_CONFIG_FLAGS &= ~LED_FLAG_DISABLE;
         }
         cmd_buf[0]   = 0;  /* mark command handled */
         return 1;          /* intercepted */
@@ -307,48 +218,6 @@ int handle_vendor_cmd(void) {
          * Response: cmd_buf[3] = mode (0 = off, 1 = on)
          */
         cmd_buf[3] = g_turbo_mode;
-        cmd_buf[0] = 0;   /* mark command handled */
-        return 1;         /* intercepted */
-    }
-
-    case 0x21: {
-        /* SET_PRIORITY_MASK
-         * Request:
-         *   cmd_buf[3] = mode (0 = off, 1 = FPS, 2 = MOBA, 0xFF = custom)
-         *   cmd_buf[4..11] = 64-bit custom bitmask (little-endian, when mode == 0xFF)
-         */
-        uint8_t mode = cmd_buf[3];
-        uint64_t mask = 0;
-        if (mode == 1) {
-            mask = PRIORITY_MASK_FPS;
-        } else if (mode == 2) {
-            mask = PRIORITY_MASK_MOBA;
-        } else if (mode == 0xFF) {
-            for (uint32_t i = 0; i < 8; i++) {
-                mask |= ((uint64_t)cmd_buf[4 + i]) << (i * 8);
-            }
-        }
-        g_priority_mode = mode;
-        g_active_priority_mask = mask;
-        rebuild_priority_mask(mask);
-        if (mode == 0) {
-            restore_hw_stock_mask();
-            g_scan_pass = 0;
-        }
-        cmd_buf[0] = 0;   /* mark command handled */
-        return 1;         /* intercepted */
-    }
-
-    case 0xA1: {
-        /* GET_PRIORITY_MASK
-         * Response:
-         *   cmd_buf[3] = mode (0 = off, 1 = FPS, 2 = MOBA, 0xFF = custom)
-         *   cmd_buf[4..11] = active 64-bit bitmask (little-endian)
-         */
-        cmd_buf[3] = g_priority_mode;
-        for (uint32_t i = 0; i < 8; i++) {
-            cmd_buf[4 + i] = (uint8_t)((g_active_priority_mask >> (i * 8)) & 0xFF);
-        }
         cmd_buf[0] = 0;   /* mark command handled */
         return 1;         /* intercepted */
     }

@@ -63,6 +63,12 @@ BINARY_PATCHES = [
         b'\x00\xbf',  # nop
         "ADC scan: bypass 8-sample boxcar & 2-sample EMA filter (raw 1-sample fast path)",
     ),
+    BinaryPatch(
+        0x0801424A,
+        b'\x06\xd3',  # blo.n 0x801425a
+        b'\x06\xe0',  # b.n   0x801425a
+        "Main loop: bypass wireless check and dummy function calls on wired board",
+    ),
 ]
 
 project = PatchProject(
